@@ -146,10 +146,19 @@ mod tests {
             .as_array()
             .expect("deb bundle declares a depends array");
 
-        for required in ["libwebkit2gtk-4.1-0", "libgtk-3-0", "git"] {
+        assert!(
+            depends.iter().any(|entry| entry == "git"),
+            "deb depends must include git"
+        );
+
+        // tauri-cli's Linux bundling unconditionally appends libwebkit2gtk-4.1-0 and
+        // libgtk-3-0 to this list with no dedup (verified against tauri-cli 2.11.4/2.11.5),
+        // so listing them here too would double them up in the built control file's
+        // Depends: line. Leave them out of our config; the CLI supplies them.
+        for auto_injected in ["libwebkit2gtk-4.1-0", "libgtk-3-0"] {
             assert!(
-                depends.iter().any(|entry| entry == required),
-                "deb depends must include {required}"
+                !depends.iter().any(|entry| entry == auto_injected),
+                "{auto_injected} is auto-injected by tauri-cli on Linux -- listing it here would duplicate it"
             );
         }
     }
