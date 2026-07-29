@@ -1,5 +1,10 @@
+mod config;
+
 use tauri::menu::MenuBuilder;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_dialog::DialogExt;
+
+use config::{Config, ConfigOutcome, RootDraft, RootValidation};
 
 pub const MENU_SETTINGS: &str = "settings";
 pub const MENU_ABOUT: &str = "about";
@@ -17,6 +22,44 @@ pub const EVENT_MENU_SETTINGS: &str = "menu://settings";
 #[tauri::command]
 fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+fn get_config() -> ConfigOutcome {
+    config::get_config()
+}
+
+#[tauri::command]
+fn validate_root_path(path: String) -> RootValidation {
+    config::validate_root_path(&path)
+}
+
+/// Native folder picker. `blocking_pick_folder` must not run on the main thread; an
+/// `async fn` Tauri command already runs on the async runtime's thread pool, so this
+/// is safe as written.
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .blocking_pick_folder()
+        .map(|file_path| file_path.to_string())
+}
+
+#[tauri::command]
+fn save_config(drafts: Vec<RootDraft>) -> Result<Config, String> {
+    config::save_config(drafts)
+}
+
+/// Shown once when `get_config` reports an unparseable config.toml. The frontend
+/// still renders a persistent in-webview error panel afterward -- this native dialog
+/// is a transient attention-getter, not the durable "main UI does not load" state.
+#[tauri::command]
+async fn show_config_error(app: AppHandle, error: String) {
+    app.dialog()
+        .message(error)
+        .title("note-taker configuration error")
+        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+        .blocking_show();
 }
 
 /// A failed emit means the menu item silently does nothing, which is invisible
@@ -39,7 +82,15 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_app_version])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            get_app_version,
+            get_config,
+            validate_root_path,
+            pick_folder,
+            save_config,
+            show_config_error,
+        ])
         .setup(|app| {
             // Flat menu bar: Settings, About and Quit are top-level actions with
             // no submenus, so `.text(..)` items go straight onto the menu root.

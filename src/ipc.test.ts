@@ -2,6 +2,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   COMMAND_GET_APP_VERSION,
+  COMMAND_GET_CONFIG,
+  COMMAND_PICK_FOLDER,
+  COMMAND_SAVE_CONFIG,
+  COMMAND_SHOW_CONFIG_ERROR,
+  COMMAND_VALIDATE_ROOT_PATH,
   EVENT_MENU_ABOUT,
   EVENT_MENU_SETTINGS,
 } from "./ipc";
@@ -18,10 +23,15 @@ describe("IPC names agree with the Rust backend", () => {
     expect(rustSource).toContain(`"${value}"`);
   });
 
-  it("invokes a command the backend actually registers", () => {
-    expect(rustSource).toContain(`fn ${COMMAND_GET_APP_VERSION}()`);
-    expect(rustSource).toContain(
-      `tauri::generate_handler![${COMMAND_GET_APP_VERSION}]`,
-    );
+  it.each([
+    COMMAND_GET_APP_VERSION,
+    COMMAND_GET_CONFIG,
+    COMMAND_VALIDATE_ROOT_PATH,
+    COMMAND_PICK_FOLDER,
+    COMMAND_SAVE_CONFIG,
+    COMMAND_SHOW_CONFIG_ERROR,
+  ])("invokes %s, a command the backend actually registers", (command) => {
+    expect(rustSource).toMatch(new RegExp(`fn ${command}\\(`));
+    expect(rustSource).toContain(`${command},\n`);
   });
 });

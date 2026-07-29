@@ -1,0 +1,131 @@
+.roots-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 560px;
+}
+
+.roots-editor__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.roots-editor__row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--surface-sunken);
+}
+
+.roots-editor__row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.roots-editor__path {
+  flex: 1;
+  overflow: hidden;
+  font-family: ui-monospace, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roots-editor__create-missing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.roots-editor__remove {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-raised);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.roots-editor__row-fields {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.roots-editor__field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.roots-editor__field input[type="text"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-raised);
+  color: var(--text-color);
+  font: inherit;
+}
+
+.roots-editor__field--checkbox {
+  flex-direction: row;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.roots-editor__add {
+  align-self: flex-start;
+  padding: 8px 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: 6px;
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.roots-editor__error {
+  margin: 0;
+  color: var(--danger-color);
+  font-size: 0.85rem;
+}
+
+.roots-editor__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.roots-editor__actions button {
+  padding: 8px 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-sunken);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.roots-editor__save {
+  border-color: var(--focus-ring-color);
+  background-color: var(--focus-ring-color);
+  color: white;
+}
+
+.roots-editor__save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

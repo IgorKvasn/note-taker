@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions the main window needs. Tauri v2 denies core commands unless granted here, so the menu-event listener requires core:event:allow-listen explicitly.",
+  "description": "Core permissions the main window needs. Tauri v2 denies core commands unless granted here, so the menu-event listener requires core:event:allow-listen explicitly. dialog:default covers the native folder picker and message dialog used by config setup.",
   "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "dialog:default"]
 }
