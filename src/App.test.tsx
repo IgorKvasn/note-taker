@@ -24,6 +24,10 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
     }
     if (command === "show_config_error") return Promise.resolve(undefined);
     if (command === "list_tree") return Promise.resolve([]);
+    if (command === "open_note") {
+      return Promise.resolve({ content: "", id: "01NOTE", is_conflicted: false });
+    }
+    if (command === "save_note") return Promise.resolve(undefined);
     return Promise.resolve(undefined);
   });
 }
@@ -152,6 +156,60 @@ describe("App", () => {
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("show_config_error", { error: "expected `=` at line 3" }),
     );
+  });
+
+  it("shows the placeholder pane with no note open initially", async () => {
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    expect(screen.getByText("No note open")).toBeDefined();
+    expect(screen.queryByTestId("note-editor")).toBeNull();
+  });
+
+  it("loads a note into the CM6 editor when it is clicked in the tree", async () => {
+    mockInvoke({
+      list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
+      open_note: { content: "hello world", id: "01NOTE", is_conflicted: false },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+
+    expect(await screen.findByTestId("note-editor")).toBeDefined();
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("open_note", { rootId: EMPTY_CONFIG.roots[0].id, path: "note.md" }),
+    );
+    expect(await screen.findByText("hello world")).toBeDefined();
+  });
+
+  it("keeps only one note open at a time when a second note is clicked", async () => {
+    invoke.mockImplementation((command: string, args?: { path: string }) => {
+      if (command === "list_tree") {
+        return Promise.resolve([
+          { name: "first.md", path: "first.md", is_directory: false, children: [] },
+          { name: "second.md", path: "second.md", is_directory: false, children: [] },
+        ]);
+      }
+      if (command === "open_note") {
+        return Promise.resolve({ content: `content of ${args!.path}`, id: "01NOTE", is_conflicted: false });
+      }
+      if (command === "get_app_version") return Promise.resolve("0.1.0");
+      if (command === "get_config") return Promise.resolve({ type: "ok", config: EMPTY_CONFIG } satisfies ConfigOutcome);
+      return Promise.resolve(undefined);
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await userEvent.click(await screen.findByRole("button", { name: "first.md" }));
+    await screen.findByText("content of first.md");
+    expect(screen.queryAllByTestId("note-editor")).toHaveLength(1);
+
+    await userEvent.click(await screen.findByRole("button", { name: "second.md" }));
+
+    expect(await screen.findByText("content of second.md")).toBeDefined();
+    expect(screen.queryByText("content of first.md")).toBeNull();
+    expect(screen.queryAllByTestId("note-editor")).toHaveLength(1);
   });
 
   it("opens Settings from the menu event and lists existing roots", async () => {

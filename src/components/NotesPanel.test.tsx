@@ -27,6 +27,8 @@ function mockTrees(trees: Record<string, TreeNode[] | Error>) {
   });
 }
 
+const noop = () => {};
+
 describe("NotesPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -34,7 +36,7 @@ describe("NotesPanel", () => {
 
   it("renders one section per root, in config order, labeled by folder name", async () => {
     mockTrees({ [ROOT_A.id]: [], [ROOT_B.id]: [] });
-    render(<NotesPanel roots={[ROOT_A, ROOT_B]} />);
+    render(<NotesPanel roots={[ROOT_A, ROOT_B]} onOpenNote={noop} />);
 
     const headers = await screen.findAllByRole("button", { expanded: true });
     const labels = headers.map((header) => header.textContent);
@@ -46,7 +48,7 @@ describe("NotesPanel", () => {
 
   it("never displays the root id anywhere", async () => {
     mockTrees({ [ROOT_A.id]: [] });
-    render(<NotesPanel roots={[ROOT_A]} />);
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
 
     await screen.findByText("notes");
 
@@ -64,7 +66,7 @@ describe("NotesPanel", () => {
         note("zebra.md", "zebra.md"),
       ],
     });
-    render(<NotesPanel roots={[ROOT_A]} />);
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
 
     await screen.findByText("notes");
     const items = await screen.findAllByRole("button", { name: /folder|\.md/ });
@@ -75,7 +77,7 @@ describe("NotesPanel", () => {
 
   it("does not show non-.md files", async () => {
     mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });
-    render(<NotesPanel roots={[ROOT_A]} />);
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
 
     await screen.findByText("note.md");
     expect(screen.queryByText("image.png")).toBeNull();
@@ -85,7 +87,7 @@ describe("NotesPanel", () => {
     mockTrees({
       [ROOT_A.id]: [folder("my-folder", "my-folder", [note("child.md", "my-folder/child.md")])],
     });
-    render(<NotesPanel roots={[ROOT_A]} />);
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
 
     const folderButton = await screen.findByRole("button", { name: "my-folder" });
     expect(folderButton).toHaveProperty("ariaExpanded", "false");
@@ -104,7 +106,7 @@ describe("NotesPanel", () => {
 
   it("does not crash when a root is missing or unreadable", async () => {
     mockTrees({ [ROOT_A.id]: new Error("No such file or directory (os error 2)") });
-    render(<NotesPanel roots={[ROOT_A]} />);
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
 
     expect(await screen.findByRole("alert")).toBeDefined();
     expect(screen.getByText(/No such file or directory/)).toBeDefined();
@@ -117,7 +119,7 @@ describe("NotesPanel", () => {
       call += 1;
       return Promise.resolve(call === 1 ? [note("first.md", "first.md")] : [note("second.md", "second.md")]);
     });
-    render(<NotesPanel roots={[ROOT_A]} />);
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
 
     await screen.findByText("first.md");
 
@@ -129,7 +131,7 @@ describe("NotesPanel", () => {
 
   it("re-calls list_tree when the window regains focus", async () => {
     mockTrees({ [ROOT_A.id]: [] });
-    render(<NotesPanel roots={[ROOT_A]} />);
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_tree", { rootId: ROOT_A.id }));
     invoke.mockClear();
@@ -137,5 +139,31 @@ describe("NotesPanel", () => {
     window.dispatchEvent(new Event("focus"));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_tree", { rootId: ROOT_A.id }));
+  });
+
+  it("calls onOpenNote with the root and path when a note is clicked", async () => {
+    mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });
+    const onOpenNote = vi.fn();
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={onOpenNote} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+
+    expect(onOpenNote).toHaveBeenCalledWith(ROOT_A.id, "note.md");
+  });
+
+  it("highlights the clicked note as selected", async () => {
+    mockTrees({ [ROOT_A.id]: [note("first.md", "first.md"), note("second.md", "second.md")] });
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+    const first = await screen.findByRole("button", { name: "first.md" });
+    const second = await screen.findByRole("button", { name: "second.md" });
+
+    await userEvent.click(first);
+    expect(first.getAttribute("data-selected")).toBe("true");
+    expect(second.getAttribute("data-selected")).toBeNull();
+
+    await userEvent.click(second);
+    expect(first.getAttribute("data-selected")).toBeNull();
+    expect(second.getAttribute("data-selected")).toBe("true");
   });
 });

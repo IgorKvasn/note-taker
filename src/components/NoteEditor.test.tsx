@@ -1,0 +1,90 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NoteEditor } from "./NoteEditor";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
+function mockInvoke(overrides: Record<string, unknown> = {}) {
+  invoke.mockImplementation((command: string, args?: unknown) => {
+    if (command in overrides) {
+      const value = overrides[command];
+      return value instanceof Promise ? value : Promise.resolve(value);
+    }
+    if (command === "open_note") {
+      return Promise.resolve({ content: "# Loaded\n", id: "01LOADED", is_conflicted: false });
+    }
+    if (command === "save_note") {
+      return Promise.resolve(undefined);
+    }
+    throw new Error(`unexpected command ${command} with args ${JSON.stringify(args)}`);
+  });
+}
+
+describe("NoteEditor", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInvoke();
+  });
+
+  it("loads the note's content via open_note and renders it in the editor", async () => {
+    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
+    expect(await screen.findByText("# Loaded")).toBeDefined();
+  });
+
+  it("renders exactly one CodeMirror editor instance", async () => {
+    const { container } = render(<NoteEditor rootId="01ROOT" path="note.md" />);
+
+    await screen.findByText("# Loaded");
+
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+  });
+
+  it("autosaves edited content to the correct file after the user stops typing", async () => {
+    const user = userEvent.setup();
+
+    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
+    await screen.findByText("# Loaded");
+
+    const editable = await screen.findByRole("textbox");
+    await user.click(editable);
+    await user.keyboard(" edited");
+
+    expect(invoke).not.toHaveBeenCalledWith("save_note", expect.anything());
+
+    await waitFor(
+      () =>
+        expect(invoke).toHaveBeenCalledWith("save_note", {
+          rootId: "01ROOT",
+          path: "note.md",
+          content: expect.stringContaining("edited"),
+        }),
+      { timeout: 2000 },
+    );
+  });
+
+  it("flushes a pending save for the previous note before switching to a new one", async () => {
+    const user = userEvent.setup();
+
+    const { rerender } = render(<NoteEditor rootId="01ROOT" path="first.md" />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "first.md" }));
+    await screen.findByText("# Loaded");
+
+    const editable = await screen.findByRole("textbox");
+    await user.click(editable);
+    await user.keyboard(" edited");
+
+    rerender(<NoteEditor rootId="01ROOT" path="second.md" />);
+
+    expect(invoke).toHaveBeenCalledWith("save_note", {
+      rootId: "01ROOT",
+      path: "first.md",
+      content: expect.stringContaining("edited"),
+    });
+    expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "second.md" });
+  });
+});

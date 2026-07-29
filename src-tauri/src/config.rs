@@ -87,7 +87,6 @@ pub fn find_root_path(root_id: &str) -> Result<PathBuf, String> {
 /// category rather than a check every command taking a relative path must
 /// remember (spec §9.2). Every future command addressing a note or directory
 /// inside a root should resolve through this rather than joining paths itself.
-#[allow(dead_code)]
 pub fn resolve_path_in_root(root_id: &str, relative_path: &str) -> Result<PathBuf, String> {
     let root_path = find_root_path(root_id)?;
 

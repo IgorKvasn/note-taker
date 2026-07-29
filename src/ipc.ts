@@ -11,6 +11,8 @@ export const COMMAND_PICK_FOLDER = "pick_folder";
 export const COMMAND_SAVE_CONFIG = "save_config";
 export const COMMAND_SHOW_CONFIG_ERROR = "show_config_error";
 export const COMMAND_LIST_TREE = "list_tree";
+export const COMMAND_OPEN_NOTE = "open_note";
+export const COMMAND_SAVE_NOTE = "save_note";
 
 /** Mirrors `RootConfig` in `src-tauri/src/config.rs`. */
 export interface RootConfig {
@@ -59,4 +61,11 @@ export interface TreeNode {
   path: string;
   is_directory: boolean;
   children: TreeNode[];
+}
+
+/** Mirrors `OpenNoteResult` in `src-tauri/src/notes.rs`. */
+export interface OpenNoteResult {
+  content: string;
+  id: string;
+  is_conflicted: boolean;
 }

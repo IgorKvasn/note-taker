@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AboutModal } from "./components/AboutModal";
+import { NoteEditor } from "./components/NoteEditor";
 import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { SplitPane } from "./components/SplitPane";
@@ -21,6 +22,9 @@ export function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [configOutcome, setConfigOutcome] = useState<ConfigOutcome | null>(null);
+  const [openNote, setOpenNote] = useState<{ rootId: string; path: string } | null>(null);
+
+  const openNoteHandler = useCallback((rootId: string, path: string) => setOpenNote({ rootId, path }), []);
 
   const loadConfig = useCallback(() => {
     invoke<ConfigOutcome>(COMMAND_GET_CONFIG).then(setConfigOutcome);
@@ -97,11 +101,15 @@ export function App() {
   return (
     <div className="app">
       <SplitPane
-        left={<NotesPanel roots={configOutcome.config.roots} />}
+        left={<NotesPanel roots={configOutcome.config.roots} onOpenNote={openNoteHandler} />}
         right={
-          <div className="pane pane--placeholder">
-            <p>No note open</p>
-          </div>
+          openNote === null ? (
+            <div className="pane pane--placeholder">
+              <p>No note open</p>
+            </div>
+          ) : (
+            <NoteEditor key={`${openNote.rootId}:${openNote.path}`} rootId={openNote.rootId} path={openNote.path} />
+          )
         }
       />
       <AboutModal isOpen={isAboutOpen} version={version} onClose={closeAbout} />

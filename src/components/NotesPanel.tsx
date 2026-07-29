@@ -5,6 +5,7 @@ import "./NotesPanel.css";
 
 interface NotesPanelProps {
   roots: RootConfig[];
+  onOpenNote: (rootId: string, path: string) => void;
 }
 
 interface Selection {
@@ -28,10 +29,11 @@ interface TreeNodeViewProps {
   expandedPaths: Set<string>;
   selection: Selection | null;
   onToggleFolder: (path: string) => void;
+  onOpenNote: (path: string) => void;
   depth: number;
 }
 
-function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, depth }: TreeNodeViewProps) {
+function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, onOpenNote, depth }: TreeNodeViewProps) {
   if (!node.is_directory) {
     return (
       <li>
@@ -40,6 +42,7 @@ function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, 
           className="notes-panel__item notes-panel__item--note"
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           data-selected={isSameSelection(selection, { rootId, path: node.path }) || undefined}
+          onClick={() => onOpenNote(node.path)}
         >
           {node.name}
         </button>
@@ -72,6 +75,7 @@ function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, 
               expandedPaths={expandedPaths}
               selection={selection}
               onToggleFolder={onToggleFolder}
+              onOpenNote={onOpenNote}
               depth={depth + 1}
             />
           ))}
@@ -85,10 +89,11 @@ interface RootSectionProps {
   root: RootConfig;
   selection: Selection | null;
   onSelect: (selection: Selection) => void;
+  onOpenNote: (rootId: string, path: string) => void;
   refreshToken: number;
 }
 
-function RootSection({ root, selection, onSelect, refreshToken }: RootSectionProps) {
+function RootSection({ root, selection, onSelect, onOpenNote, refreshToken }: RootSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [tree, setTree] = useState<TreeNode[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +131,14 @@ function RootSection({ root, selection, onSelect, refreshToken }: RootSectionPro
     [onSelect, root.id],
   );
 
+  const openNote = useCallback(
+    (path: string) => {
+      onSelect({ rootId: root.id, path });
+      onOpenNote(root.id, path);
+    },
+    [onOpenNote, onSelect, root.id],
+  );
+
   return (
     <section className="notes-panel__section">
       <button
@@ -155,6 +168,7 @@ function RootSection({ root, selection, onSelect, refreshToken }: RootSectionPro
                   expandedPaths={expandedPaths}
                   selection={selection}
                   onToggleFolder={toggleFolder}
+                  onOpenNote={openNote}
                   depth={0}
                 />
               ))}
@@ -166,7 +180,7 @@ function RootSection({ root, selection, onSelect, refreshToken }: RootSectionPro
   );
 }
 
-export function NotesPanel({ roots }: NotesPanelProps) {
+export function NotesPanel({ roots, onOpenNote }: NotesPanelProps) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -191,6 +205,7 @@ export function NotesPanel({ roots }: NotesPanelProps) {
           root={root}
           selection={selection}
           onSelect={setSelection}
+          onOpenNote={onOpenNote}
           refreshToken={refreshToken}
         />
       ))}
