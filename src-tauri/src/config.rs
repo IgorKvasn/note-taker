@@ -64,6 +64,57 @@ pub fn config_path() -> Option<PathBuf> {
     Some(base_dirs.config_dir().join("note-taker").join("config.toml"))
 }
 
+/// Resolves a root's configured path from its stable ID, as every IPC command
+/// addressing a note or directory takes `(root_id, relative_path)` rather than
+/// an absolute path (spec §9.2).
+pub fn find_root_path(root_id: &str) -> Result<PathBuf, String> {
+    let config = match get_config() {
+        ConfigOutcome::Ok { config } => config,
+        ConfigOutcome::Missing => return Err("no configuration file exists".to_string()),
+        ConfigOutcome::Invalid { error } => return Err(error),
+    };
+
+    config
+        .roots
+        .into_iter()
+        .find(|root| root.id == root_id)
+        .map(|root| PathBuf::from(root.path))
+        .ok_or_else(|| format!("no root with id {root_id}"))
+}
+
+/// Resolves `(root_id, relative_path)` to an absolute path, rejecting any result
+/// that escapes the root -- killing path traversal (`../../.ssh/id_rsa`) as a
+/// category rather than a check every command taking a relative path must
+/// remember (spec §9.2). Every future command addressing a note or directory
+/// inside a root should resolve through this rather than joining paths itself.
+#[allow(dead_code)]
+pub fn resolve_path_in_root(root_id: &str, relative_path: &str) -> Result<PathBuf, String> {
+    let root_path = find_root_path(root_id)?;
+
+    let canonical_root = root_path
+        .canonicalize()
+        .map_err(|error| format!("could not resolve root path: {error}"))?;
+
+    let candidate = canonical_root.join(relative_path);
+
+    // `canonicalize` requires the path to exist, which a not-yet-created note
+    // wouldn't -- so containment is checked lexically via `components()`
+    // instead, which also collapses `.`/`..` without touching the filesystem.
+    let mut depth: i32 = 0;
+    for component in relative_path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => depth -= 1,
+            _ => depth += 1,
+        }
+        if depth < 0 {
+            return Err(format!("path escapes its root: {relative_path}"));
+        }
+    }
+
+    Ok(candidate)
+}
+
 pub fn get_config() -> ConfigOutcome {
     let Some(config_path) = config_path() else {
         return ConfigOutcome::Invalid {
@@ -491,6 +542,98 @@ mod tests {
             save_config(drafts).expect("save should succeed");
 
             assert_eq!(git_remote_url(root_dir.path()), None);
+        });
+    }
+
+    #[test]
+    fn find_root_path_resolves_a_configured_root_by_id() {
+        with_xdg_config_home(|_| {
+            let config = Config {
+                version: 1,
+                roots: vec![RootConfig {
+                    id: "01AAA".to_string(),
+                    path: "/home/user/notes".to_string(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                }],
+            };
+            write_config(&config).unwrap();
+
+            let path = find_root_path("01AAA").unwrap();
+            assert_eq!(path, PathBuf::from("/home/user/notes"));
+        });
+    }
+
+    #[test]
+    fn find_root_path_errors_on_unknown_id() {
+        with_xdg_config_home(|_| {
+            let config = Config { version: 1, roots: vec![] };
+            write_config(&config).unwrap();
+
+            assert!(find_root_path("nonexistent").is_err());
+        });
+    }
+
+    #[test]
+    fn resolve_path_in_root_joins_a_relative_path_onto_the_root() {
+        with_xdg_config_home(|_| {
+            let root_dir = TempDir::new().unwrap();
+            let config = Config {
+                version: 1,
+                roots: vec![RootConfig {
+                    id: "01AAA".to_string(),
+                    path: root_dir.path().to_str().unwrap().to_string(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                }],
+            };
+            write_config(&config).unwrap();
+
+            let resolved = resolve_path_in_root("01AAA", "folder/note.md").unwrap();
+            assert_eq!(
+                resolved,
+                root_dir.path().canonicalize().unwrap().join("folder/note.md")
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_path_in_root_rejects_traversal_above_the_root() {
+        with_xdg_config_home(|_| {
+            let root_dir = TempDir::new().unwrap();
+            let config = Config {
+                version: 1,
+                roots: vec![RootConfig {
+                    id: "01AAA".to_string(),
+                    path: root_dir.path().to_str().unwrap().to_string(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                }],
+            };
+            write_config(&config).unwrap();
+
+            assert!(resolve_path_in_root("01AAA", "../../.ssh/id_rsa").is_err());
+        });
+    }
+
+    #[test]
+    fn resolve_path_in_root_rejects_traversal_that_dips_below_zero_before_recovering() {
+        with_xdg_config_home(|_| {
+            let root_dir = TempDir::new().unwrap();
+            let config = Config {
+                version: 1,
+                roots: vec![RootConfig {
+                    id: "01AAA".to_string(),
+                    path: root_dir.path().to_str().unwrap().to_string(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                }],
+            };
+            write_config(&config).unwrap();
+
+            // Escapes above the root and comes back down -- still a traversal attempt,
+            // so it must be rejected even though the final depth looks non-negative.
+            assert!(resolve_path_in_root("01AAA", "a/../../b").is_err());
         });
     }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AboutModal } from "./components/AboutModal";
+import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { SplitPane } from "./components/SplitPane";
 import {
@@ -96,11 +97,7 @@ export function App() {
   return (
     <div className="app">
       <SplitPane
-        left={
-          <div className="pane pane--placeholder">
-            <p>Notes</p>
-          </div>
-        }
+        left={<NotesPanel roots={configOutcome.config.roots} />}
         right={
           <div className="pane pane--placeholder">
             <p>No note open</p>

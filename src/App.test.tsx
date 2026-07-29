@@ -23,6 +23,7 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
       return Promise.resolve({ type: "ok", config: EMPTY_CONFIG } satisfies ConfigOutcome);
     }
     if (command === "show_config_error") return Promise.resolve(undefined);
+    if (command === "list_tree") return Promise.resolve([]);
     return Promise.resolve(undefined);
   });
 }

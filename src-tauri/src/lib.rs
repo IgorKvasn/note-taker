@@ -1,10 +1,12 @@
 mod config;
+mod tree;
 
 use tauri::menu::MenuBuilder;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 
 use config::{Config, ConfigOutcome, RootDraft, RootValidation};
+use tree::TreeNode;
 
 pub const MENU_SETTINGS: &str = "settings";
 pub const MENU_ABOUT: &str = "about";
@@ -50,6 +52,12 @@ fn save_config(drafts: Vec<RootDraft>) -> Result<Config, String> {
     config::save_config(drafts)
 }
 
+#[tauri::command]
+fn list_tree(root_id: String) -> Result<Vec<TreeNode>, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    tree::list_tree(&root_path)
+}
+
 /// Shown once when `get_config` reports an unparseable config.toml. The frontend
 /// still renders a persistent in-webview error panel afterward -- this native dialog
 /// is a transient attention-getter, not the durable "main UI does not load" state.
@@ -90,6 +98,7 @@ pub fn run() {
             pick_folder,
             save_config,
             show_config_error,
+            list_tree,
         ])
         .setup(|app| {
             // Flat menu bar: Settings, About and Quit are top-level actions with

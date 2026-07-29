@@ -10,6 +10,7 @@ export const COMMAND_VALIDATE_ROOT_PATH = "validate_root_path";
 export const COMMAND_PICK_FOLDER = "pick_folder";
 export const COMMAND_SAVE_CONFIG = "save_config";
 export const COMMAND_SHOW_CONFIG_ERROR = "show_config_error";
+export const COMMAND_LIST_TREE = "list_tree";
 
 /** Mirrors `RootConfig` in `src-tauri/src/config.rs`. */
 export interface RootConfig {
@@ -50,4 +51,12 @@ export interface RootDraft {
   auto_sync: boolean;
   remote_url: string;
   create_if_missing: boolean;
+}
+
+/** Mirrors `TreeNode` in `src-tauri/src/tree.rs`. */
+export interface TreeNode {
+  name: string;
+  path: string;
+  is_directory: boolean;
+  children: TreeNode[];
 }
