@@ -1,0 +1,53 @@
+.about-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgb(15 23 42 / 45%);
+  z-index: 10;
+}
+
+.about-dialog {
+  min-width: 320px;
+  padding: 24px;
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+  box-shadow: 0 18px 40px rgb(15 23 42 / 28%);
+}
+
+.about-dialog__title {
+  margin: 0 0 16px;
+  font-size: 1.15rem;
+}
+
+.about-dialog__facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  margin: 0 0 24px;
+}
+
+.about-dialog__facts dt {
+  color: var(--text-muted);
+}
+
+.about-dialog__facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.about-dialog__close {
+  width: 100%;
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-sunken);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.about-dialog__close:hover {
+  background-color: var(--surface-hover);
+}

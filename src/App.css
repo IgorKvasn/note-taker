@@ -1,0 +1,21 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.pane {
+  flex: 1;
+  padding: 16px;
+}
+
+.pane--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.pane--placeholder p {
+  margin: 0;
+}

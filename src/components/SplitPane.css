@@ -1,0 +1,41 @@
+.split-pane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* While dragging, the cursor is kept steady and text selection suppressed across
+   the whole surface -- otherwise sweeping over the panes selects their content. */
+.split-pane[data-dragging] {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.split-pane__side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: auto;
+}
+
+/* The left pane's width comes from flex-basis; the right pane takes the rest. */
+.split-pane__side:last-child {
+  flex: 1;
+}
+
+.split-pane__divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background-color: var(--divider-color);
+  transition: background-color 120ms ease;
+}
+
+.split-pane__divider:hover {
+  background-color: var(--divider-color-active);
+}
+
+.split-pane__divider:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: -2px;
+}

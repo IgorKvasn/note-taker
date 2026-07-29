@@ -1,0 +1,23 @@
+[package]
+name = "note-taker"
+version = "0.1.0"
+description = "Markdown notes in git-synced folders"
+authors = ["Igor Kvasnicka"]
+edition = "2021"
+rust-version = "1.77.2"
+
+# The version above is the single source of truth: `tauri.conf.json` deliberately
+# omits `version`. Releases stay plain MAJOR.MINOR.PATCH; see README.md.
+
+[lib]
+name = "note_taker_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+
+[dev-dependencies]
+serde_json = "1.0.151"
