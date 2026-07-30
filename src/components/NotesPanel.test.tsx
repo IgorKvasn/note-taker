@@ -1,8 +1,29 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NotesPanel } from "./NotesPanel";
 import type { RootConfig, SearchResult, TreeNode } from "../ipc";
+
+/** Minimal `DataTransfer` stand-in -- jsdom doesn't implement the native one,
+ * so drag-and-drop tests round-trip payloads through this instead. */
+class FakeDataTransfer {
+  private store = new Map<string, string>();
+  dropEffect = "none";
+  effectAllowed = "none";
+  setData(format: string, data: string) {
+    this.store.set(format, data);
+  }
+  getData(format: string) {
+    return this.store.get(format) ?? "";
+  }
+}
+
+function dragAndDrop(source: Element, target: Element) {
+  const dataTransfer = new FakeDataTransfer();
+  fireEvent.dragStart(source, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer });
+  fireEvent.drop(target, { dataTransfer });
+}
 
 const invoke = vi.hoisted(() => vi.fn());
 const listen = vi.hoisted(() => vi.fn());
@@ -637,6 +658,249 @@ describe("NotesPanel", () => {
       expect(onOpenNote).toHaveBeenCalledWith(result.root_id, result.path, result.first_match_offset);
       expect(await screen.findByTestId("search-results")).toBeDefined();
       expect(screen.getByPlaceholderText("Search notes")).toHaveProperty("value", "ab");
+    });
+  });
+
+  describe("rename", () => {
+    it("F2 opens the rename field on the selected note", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+      fireEvent.keyDown(document, { key: "F2" });
+
+      expect(await screen.findByRole("textbox", { name: "Rename note" })).toHaveProperty("value", "note.md");
+    });
+
+    it("F2 opens the rename field on the selected folder", async () => {
+      mockTrees({ [ROOT_A.id]: [folder("my-folder", "my-folder")] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: "my-folder" }));
+      fireEvent.keyDown(document, { key: "F2" });
+
+      expect(await screen.findByRole("textbox", { name: "Rename folder" })).toHaveProperty("value", "my-folder");
+    });
+
+    it("is reachable from the context menu and has no Move to... item", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const noteButton = await screen.findByRole("button", { name: "note.md" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: noteButton });
+
+      expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeDefined();
+      expect(screen.queryByRole("menuitem", { name: /move to/i })).toBeNull();
+
+      await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+
+      expect(await screen.findByRole("textbox", { name: "Rename note" })).toHaveProperty("value", "note.md");
+    });
+
+    it("right-clicking empty space offers no Rename item", async () => {
+      mockTrees({ [ROOT_A.id]: [] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const section = (await screen.findByText("notes")).closest("section")!;
+      const body = section.querySelector(".notes-panel__section-body")!;
+      await userEvent.pointer({ keys: "[MouseRight]", target: body });
+
+      expect(await screen.findByRole("menuitem", { name: "New note" })).toBeDefined();
+      expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+    });
+
+    it("Enter confirms a rename, calls move_item, and refreshes the tree", async () => {
+      let listCall = 0;
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") {
+          listCall += 1;
+          return Promise.resolve(listCall === 1 ? [note("old.md", "old.md")] : [note("new.md", "new.md")]);
+        }
+        if (command === "move_item") return Promise.resolve(undefined);
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: "old.md" }));
+      fireEvent.keyDown(document, { key: "F2" });
+
+      const field = await screen.findByRole("textbox", { name: "Rename note" });
+      await userEvent.clear(field);
+      await userEvent.type(field, "new{Enter}");
+
+      expect(await screen.findByText("new.md")).toBeDefined();
+      expect(invoke).toHaveBeenCalledWith("move_item", {
+        rootId: ROOT_A.id,
+        fromPath: "old.md",
+        toPath: "new.md",
+      });
+    });
+
+    it("shows an inline error when the rename target already exists in the destination", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") return Promise.resolve([note("existing.md", "existing.md"), note("old.md", "old.md")]);
+        if (command === "move_item") return Promise.reject(new Error("\"existing.md\" already exists in this folder"));
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: "old.md" }));
+      fireEvent.keyDown(document, { key: "F2" });
+
+      const field = await screen.findByRole("textbox", { name: "Rename note" });
+      await userEvent.clear(field);
+      await userEvent.type(field, "existing{Enter}");
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/already exists/);
+      expect(await screen.findByRole("textbox", { name: "Rename note" })).toBeDefined();
+    });
+
+    it("rejects an invalid character in a rename with an inline error", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") return Promise.resolve([note("old.md", "old.md")]);
+        if (command === "move_item") return Promise.reject(new Error("title contains an invalid character: ':'"));
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: "old.md" }));
+      fireEvent.keyDown(document, { key: "F2" });
+
+      const field = await screen.findByRole("textbox", { name: "Rename note" });
+      await userEvent.clear(field);
+      await userEvent.type(field, "bad:name{Enter}");
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/invalid character/);
+    });
+
+    it("Escape discards the rename without calling the backend", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+      fireEvent.keyDown(document, { key: "F2" });
+
+      const field = await screen.findByRole("textbox", { name: "Rename note" });
+      await userEvent.type(field, "abandoned{Escape}");
+
+      expect(screen.queryByRole("textbox", { name: "Rename note" })).toBeNull();
+      expect(invoke).not.toHaveBeenCalledWith("move_item", expect.anything());
+    });
+
+    it("calls onNotePathChanged when the renamed item is the open note", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") return Promise.resolve([note("old.md", "old.md")]);
+        if (command === "move_item") return Promise.resolve(undefined);
+        return Promise.resolve(undefined);
+      });
+      const onNotePathChanged = vi.fn();
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} onNotePathChanged={onNotePathChanged} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: "old.md" }));
+      fireEvent.keyDown(document, { key: "F2" });
+
+      const field = await screen.findByRole("textbox", { name: "Rename note" });
+      await userEvent.clear(field);
+      await userEvent.type(field, "new{Enter}");
+
+      await waitFor(() =>
+        expect(onNotePathChanged).toHaveBeenCalledWith(ROOT_A.id, "old.md", "new.md"),
+      );
+    });
+  });
+
+  describe("drag and drop move", () => {
+    it("moves a note into a different folder via drag-and-drop", async () => {
+      mockTrees({
+        [ROOT_A.id]: [folder("target", "target"), note("note.md", "note.md")],
+      });
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") return Promise.resolve([folder("target", "target"), note("note.md", "note.md")]);
+        if (command === "move_item") return Promise.resolve(undefined);
+        if (command === "get_root_status") {
+          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+        }
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const noteButton = await screen.findByRole("button", { name: "note.md" });
+      const targetFolder = await screen.findByRole("button", { name: "target" });
+
+      dragAndDrop(noteButton, targetFolder);
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("move_item", {
+          rootId: ROOT_A.id,
+          fromPath: "note.md",
+          toPath: "target/note.md",
+        }),
+      );
+    });
+
+    it("moves a folder with its subtree via drag-and-drop", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") {
+          return Promise.resolve([
+            folder("source", "source", [note("child.md", "source/child.md")]),
+            folder("target", "target"),
+          ]);
+        }
+        if (command === "move_item") return Promise.resolve(undefined);
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const sourceFolder = await screen.findByRole("button", { name: "source" });
+      const targetFolder = await screen.findByRole("button", { name: "target" });
+
+      dragAndDrop(sourceFolder, targetFolder);
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("move_item", {
+          rootId: ROOT_A.id,
+          fromPath: "source",
+          toPath: "target/source",
+        }),
+      );
+    });
+
+    it("rejects dragging a folder into its own descendant without calling move_item", async () => {
+      mockTrees({
+        [ROOT_A.id]: [folder("parent", "parent", [folder("child", "parent/child")])],
+      });
+      render(
+        <NotesPanel roots={[ROOT_A]} onOpenNote={noop} expandedPathsByRoot={{ [ROOT_A.id]: ["parent"] }} />,
+      );
+
+      const parentFolder = await screen.findByRole("button", { name: "parent" });
+      const childFolder = await screen.findByRole("button", { name: "child" });
+
+      dragAndDrop(parentFolder, childFolder);
+
+      expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringMatching(/own subfolders|itself/));
+      expect(invoke).not.toHaveBeenCalledWith("move_item", expect.anything());
+    });
+
+    it("calls onNotePathChanged when the open note is moved via drag-and-drop", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") return Promise.resolve([folder("target", "target"), note("note.md", "note.md")]);
+        if (command === "move_item") return Promise.resolve(undefined);
+        return Promise.resolve(undefined);
+      });
+      const onNotePathChanged = vi.fn();
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} onNotePathChanged={onNotePathChanged} />);
+
+      const noteButton = await screen.findByRole("button", { name: "note.md" });
+      const targetFolder = await screen.findByRole("button", { name: "target" });
+
+      dragAndDrop(noteButton, targetFolder);
+
+      await waitFor(() =>
+        expect(onNotePathChanged).toHaveBeenCalledWith(ROOT_A.id, "note.md", "target/note.md"),
+      );
     });
   });
 });

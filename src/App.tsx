@@ -45,6 +45,26 @@ export function App() {
     [setLastOpenNote],
   );
 
+  // Keeps the open note open and correctly addressed after it (or an ancestor
+  // folder) is renamed or moved elsewhere in the tree.
+  const notePathChangedHandler = useCallback(
+    (rootId: string, fromPath: string, toPath: string) => {
+      if (openNote === null || openNote.rootId !== rootId) return;
+
+      let newPath: string | null = null;
+      if (openNote.path === fromPath) {
+        newPath = toPath;
+      } else if (openNote.path.startsWith(`${fromPath}/`)) {
+        newPath = toPath + openNote.path.slice(fromPath.length);
+      }
+      if (newPath === null) return;
+
+      setOpenNote({ ...openNote, path: newPath });
+      setLastOpenNote({ root_id: rootId, path: newPath });
+    },
+    [openNote, setLastOpenNote],
+  );
+
   const loadConfig = useCallback(() => {
     invoke<ConfigOutcome>(COMMAND_GET_CONFIG).then(setConfigOutcome);
   }, []);
@@ -177,6 +197,7 @@ export function App() {
             onExpandedPathsChange={setExpandedPaths}
             openNote={openNote}
             onNoteDeleted={handleNoteDeleted}
+            onNotePathChanged={notePathChangedHandler}
           />
         }
         right={
