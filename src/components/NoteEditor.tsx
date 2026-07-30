@@ -14,6 +14,7 @@ import {
   type SyncStatusEvent,
 } from "../ipc";
 import { markdownLivePreview } from "./markdownLivePreview";
+import { noteEditorKeymap } from "./noteEditorKeymap";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteView } from "./NoteView";
 import "./NoteEditor.css";
@@ -114,7 +115,10 @@ export function NoteEditor({ rootId, path, onOpenError, scrollToOffset }: NoteEd
         doc: "",
         extensions: [
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          // Registered ahead of defaultKeymap/historyKeymap: keymap precedence
+          // follows extension order, and Mod-i must win over CodeMirror's
+          // default `selectParentSyntax` binding.
+          keymap.of([...noteEditorKeymap, ...defaultKeymap, ...historyKeymap]),
           markdown({ base: markdownLanguage }),
           markdownLivePreview,
           EditorView.updateListener.of((update) => {

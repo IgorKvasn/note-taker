@@ -31,24 +31,40 @@ function dispatchCommand(view: EditorView, run: (view: EditorView) => void) {
 
 const GROUPS: ToolbarButtonSpec[][] = [
   [
-    { label: "B", title: "Bold", run: (view) => view.dispatch(toggleWrap(view.state, "**")) },
-    { label: "I", title: "Italic", run: (view) => view.dispatch(toggleWrap(view.state, "_")) },
-    { label: "S", title: "Strikethrough", run: (view) => view.dispatch(toggleWrap(view.state, "~~")) },
-    { label: "</>", title: "Inline code", run: (view) => view.dispatch(toggleWrap(view.state, "`")) },
+    { label: "B", title: "Bold (Ctrl/Cmd+B)", run: (view) => view.dispatch(toggleWrap(view.state, "**")) },
+    { label: "I", title: "Italic (Ctrl/Cmd+I)", run: (view) => view.dispatch(toggleWrap(view.state, "_")) },
+    {
+      label: "S",
+      title: "Strikethrough (Ctrl/Cmd+Shift+X)",
+      run: (view) => view.dispatch(toggleWrap(view.state, "~~")),
+    },
+    { label: "</>", title: "Inline code (Ctrl/Cmd+E)", run: (view) => view.dispatch(toggleWrap(view.state, "`")) },
   ],
   [
-    { label: "H1", title: "Heading 1", run: (view) => view.dispatch(toggleHeading(view.state, 1)) },
-    { label: "H2", title: "Heading 2", run: (view) => view.dispatch(toggleHeading(view.state, 2)) },
-    { label: "H3", title: "Heading 3", run: (view) => view.dispatch(toggleHeading(view.state, 3)) },
+    { label: "H1", title: "Heading 1 (Ctrl/Cmd+Alt+1)", run: (view) => view.dispatch(toggleHeading(view.state, 1)) },
+    { label: "H2", title: "Heading 2 (Ctrl/Cmd+Alt+2)", run: (view) => view.dispatch(toggleHeading(view.state, 2)) },
+    { label: "H3", title: "Heading 3 (Ctrl/Cmd+Alt+3)", run: (view) => view.dispatch(toggleHeading(view.state, 3)) },
   ],
   [
-    { label: "•", title: "Bullet list", run: (view) => view.dispatch(toggleBulletList(view.state)) },
-    { label: "1.", title: "Ordered list", run: (view) => view.dispatch(toggleOrderedList(view.state)) },
+    {
+      label: "•",
+      title: "Bullet list (Ctrl/Cmd+Shift+8)",
+      run: (view) => view.dispatch(toggleBulletList(view.state)),
+    },
+    {
+      label: "1.",
+      title: "Ordered list (Ctrl/Cmd+Shift+7)",
+      run: (view) => view.dispatch(toggleOrderedList(view.state)),
+    },
     { label: "☑", title: "Task list", run: (view) => view.dispatch(toggleTaskList(view.state)) },
   ],
   [
-    { label: "❝", title: "Blockquote", run: (view) => view.dispatch(toggleBlockquote(view.state)) },
-    { label: "🔗", title: "Link", run: (view) => view.dispatch(insertLink(view.state)) },
+    {
+      label: "❝",
+      title: "Blockquote (Ctrl/Cmd+Shift+.)",
+      run: (view) => view.dispatch(toggleBlockquote(view.state)),
+    },
+    { label: "🔗", title: "Link (Ctrl/Cmd+K)", run: (view) => view.dispatch(insertLink(view.state)) },
     { label: "🖼", title: "Image", run: (view) => view.dispatch(insertImage(view.state)) },
     { label: "⊞", title: "Table", run: (view) => view.dispatch(insertTable(view.state)) },
     { label: "{ }", title: "Code block", run: (view) => view.dispatch(insertCodeBlock(view.state)) },

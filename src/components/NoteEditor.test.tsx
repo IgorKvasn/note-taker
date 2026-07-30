@@ -57,6 +57,21 @@ describe("NoteEditor", () => {
     expect(container.querySelectorAll(".cm-editor").length).toBe(1);
   });
 
+  it("applies bold formatting to the selection when Ctrl+B is pressed", async () => {
+    const user = userEvent.setup();
+    mockInvoke({ open_note: { content: "hello", id: "01LOADED", is_conflicted: false } });
+
+    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    await screen.findByText("hello");
+
+    const editable = await screen.findByRole("textbox");
+    await user.click(editable);
+    await user.keyboard("{Control>}a{/Control}");
+    await user.keyboard("{Control>}b{/Control}");
+
+    await waitFor(() => expect(editable.textContent).toBe("**hello**"));
+  });
+
   it("autosaves edited content to the correct file after the user stops typing", async () => {
     const user = userEvent.setup();
 

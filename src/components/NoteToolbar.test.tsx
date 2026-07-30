@@ -23,7 +23,7 @@ describe("NoteToolbar", () => {
 
     render(<NoteToolbar view={view} />);
 
-    await user.click(screen.getByTitle("Bold"));
+    await user.click(screen.getByTitle("Bold (Ctrl/Cmd+B)"));
 
     expect(view.state.doc.toString()).toBe("**hello**");
 
