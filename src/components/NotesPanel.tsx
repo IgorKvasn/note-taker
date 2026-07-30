@@ -3,12 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   COMMAND_CREATE_FOLDER,
   COMMAND_CREATE_NOTE,
+  COMMAND_DELETE_ITEM,
   COMMAND_LIST_TREE,
   type RootConfig,
   type SearchResult,
   type TreeNode,
 } from "../ipc";
 import { useSearch } from "../hooks/useSearch";
+import { countContents } from "./countContents";
+import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { InlineCreateField, type CreateKind } from "./InlineCreateField";
 import { RootSyncIndicator } from "./RootSyncIndicator";
 import { SearchResultsList } from "./SearchResultsList";
@@ -25,10 +28,14 @@ interface NotesPanelProps {
   /** Persisted expanded folder paths, keyed by root ID. */
   expandedPathsByRoot?: Record<string, string[]>;
   onExpandedPathsChange?: (rootId: string, expandedPaths: string[]) => void;
+  /** The note currently shown in the right pane, so a delete that removes it (or an ancestor folder) can clear it. */
+  openNote?: { rootId: string; path: string } | null;
+  onNoteDeleted?: () => void;
 }
 
 const NO_EXPANDED_PATHS: Record<string, string[]> = {};
 const noopExpandedPathsChange = () => {};
+const noopNoteDeleted = () => {};
 
 interface Selection {
   rootId: string;
@@ -56,6 +63,12 @@ interface PendingCreate {
   kind: CreateKind;
 }
 
+/** The item awaiting delete confirmation, carrying the `TreeNode` so a folder's recursive counts can be computed. */
+interface PendingDelete {
+  rootId: string;
+  node: TreeNode;
+}
+
 interface TreeNodeViewProps {
   node: TreeNode;
   rootId: string;
@@ -63,7 +76,7 @@ interface TreeNodeViewProps {
   selection: Selection | null;
   onToggleFolder: (path: string) => void;
   onOpenNote: (path: string) => void;
-  onContextMenu: (event: React.MouseEvent, dirPath: string) => void;
+  onContextMenu: (event: React.MouseEvent, dirPath: string, clickedItem: TreeNode) => void;
   pendingCreate: PendingCreate | null;
   onConfirmCreate: (title: string) => Promise<void>;
   onCancelCreate: () => void;
@@ -92,7 +105,7 @@ function TreeNodeView({
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           data-selected={isSameSelection(selection, { rootId, path: node.path }) || undefined}
           onClick={() => onOpenNote(node.path)}
-          onContextMenu={(event) => onContextMenu(event, parentDirPath(node.path))}
+          onContextMenu={(event) => onContextMenu(event, parentDirPath(node.path), node)}
         >
           {node.name}
         </button>
@@ -112,7 +125,7 @@ function TreeNodeView({
         data-selected={isSameSelection(selection, { rootId, path: node.path }) || undefined}
         aria-expanded={isExpanded}
         onClick={() => onToggleFolder(node.path)}
-        onContextMenu={(event) => onContextMenu(event, node.path)}
+        onContextMenu={(event) => onContextMenu(event, node.path, node)}
       >
         <span className="notes-panel__disclosure" data-expanded={isExpanded || undefined} aria-hidden="true" />
         {node.name}
@@ -162,7 +175,7 @@ interface RootSectionProps {
   refreshToken: number;
   initialExpandedPaths: string[];
   onExpandedPathsChange: (rootId: string, expandedPaths: string[]) => void;
-  onContextMenu: (event: React.MouseEvent, rootId: string, dirPath: string) => void;
+  onContextMenu: (event: React.MouseEvent, rootId: string, dirPath: string, clickedItem: TreeNode | null) => void;
   pendingCreate: PendingCreate | null;
   onConfirmCreate: (rootId: string, title: string) => Promise<void>;
   onCancelCreate: () => void;
@@ -255,7 +268,7 @@ function RootSection({
         // targets the root's top level -- item-level handlers already stopped
         // propagation for their own targets.
         if (event.target === event.currentTarget) {
-          onContextMenu(event, root.id, "");
+          onContextMenu(event, root.id, "", null);
         }
       }}
     >
@@ -275,7 +288,7 @@ function RootSection({
           className="notes-panel__section-body"
           onContextMenu={(event) => {
             if (event.target === event.currentTarget) {
-              onContextMenu(event, root.id, "");
+              onContextMenu(event, root.id, "", null);
             }
           }}
         >
@@ -295,7 +308,7 @@ function RootSection({
                   selection={selection}
                   onToggleFolder={toggleFolder}
                   onOpenNote={openNote}
-                  onContextMenu={(event, dirPath) => onContextMenu(event, root.id, dirPath)}
+                  onContextMenu={(event, dirPath, clickedItem) => onContextMenu(event, root.id, dirPath, clickedItem)}
                   pendingCreate={pendingCreate}
                   onConfirmCreate={(title) => onConfirmCreate(root.id, title)}
                   onCancelCreate={onCancelCreate}
@@ -331,11 +344,14 @@ export function NotesPanel({
   onOpenNote,
   expandedPathsByRoot = NO_EXPANDED_PATHS,
   onExpandedPathsChange = noopExpandedPathsChange,
+  openNote = null,
+  onNoteDeleted = noopNoteDeleted,
 }: NotesPanelProps) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const { query, results, setQuery, clear: clearSearch } = useSearch();
   const isSearchMode = results !== null;
 
@@ -363,11 +379,28 @@ export function NotesPanel({
     [onOpenNote],
   );
 
-  const handleContextMenu = useCallback((event: React.MouseEvent, rootId: string, dirPath: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setContextMenu({ x: event.clientX, y: event.clientY, rootId, dirPath });
-  }, []);
+  // The full TreeNode behind the current context menu's clickedItem, kept
+  // alongside `contextMenu` (rather than folded into ContextMenuState) since
+  // delete confirmation needs a folder's children to compute recursive counts,
+  // and ContextMenuState's shape stays the plain (path, isDirectory) pair other
+  // consumers (TreeContextMenu) actually need.
+  const [clickedNode, setClickedNode] = useState<{ rootId: string; node: TreeNode } | null>(null);
+
+  const handleContextMenu = useCallback(
+    (event: React.MouseEvent, rootId: string, dirPath: string, clickedItem: TreeNode | null) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        rootId,
+        dirPath,
+        clickedItem: clickedItem === null ? null : { path: clickedItem.path, isDirectory: clickedItem.is_directory },
+      });
+      setClickedNode(clickedItem === null ? null : { rootId, node: clickedItem });
+    },
+    [],
+  );
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
@@ -402,6 +435,37 @@ export function NotesPanel({
     },
     [pendingCreate, refresh],
   );
+
+  const startDelete = useCallback(() => {
+    if (clickedNode === null) return;
+    setPendingDelete({ rootId: clickedNode.rootId, node: clickedNode.node });
+    setContextMenu(null);
+  }, [clickedNode]);
+
+  const cancelDelete = useCallback(() => setPendingDelete(null), []);
+
+  /** A deleted note/folder is or contains the currently open note when its path is a prefix of the open note's path
+   * (an exact match for a deleted note, or `folderPath/` for a note nested under a deleted folder). */
+  const deletionClearsOpenNote = useCallback(
+    (rootId: string, deletedPath: string) => {
+      if (openNote === null || openNote.rootId !== rootId) return false;
+      return openNote.path === deletedPath || openNote.path.startsWith(`${deletedPath}/`);
+    },
+    [openNote],
+  );
+
+  const confirmDelete = useCallback(async () => {
+    if (pendingDelete === null) return;
+
+    const { rootId, node } = pendingDelete;
+    await invoke(COMMAND_DELETE_ITEM, { rootId, path: node.path });
+
+    setPendingDelete(null);
+    if (deletionClearsOpenNote(rootId, node.path)) {
+      onNoteDeleted();
+    }
+    refresh();
+  }, [pendingDelete, deletionClearsOpenNote, onNoteDeleted, refresh]);
 
   return (
     <div className="notes-panel" data-testid="notes-panel">
@@ -445,6 +509,16 @@ export function NotesPanel({
           onClose={closeContextMenu}
           onCreateNote={() => startCreate("note")}
           onCreateFolder={() => startCreate("folder")}
+          onDelete={startDelete}
+        />
+      )}
+      {pendingDelete !== null && (
+        <DeleteConfirmDialog
+          itemName={pendingDelete.node.name}
+          isDirectory={pendingDelete.node.is_directory}
+          contents={pendingDelete.node.is_directory ? countContents(pendingDelete.node) : null}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

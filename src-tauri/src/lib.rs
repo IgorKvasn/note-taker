@@ -101,6 +101,18 @@ fn create_folder(app: AppHandle, root_id: String, path: String) -> Result<(), St
     Ok(())
 }
 
+/// Permanent deletion (issue #23) -- the frontend has already shown its
+/// confirmation dialog by the time this is called. The removal is staged for
+/// the sync chain the same way any other mutation is: `run_sync_chain`'s
+/// `git add -A` picks up a deleted path just as it does an edited one.
+#[tauri::command]
+fn delete_item(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
+    let item_path = config::resolve_path_in_root(&root_id, &path)?;
+    notes::delete_item(&item_path)?;
+    trigger_sync_for_root(&app, &root_id);
+    Ok(())
+}
+
 #[tauri::command]
 fn sync_root(app: AppHandle, root_id: String) -> Result<(), String> {
     trigger_sync_for_root(&app, &root_id);
@@ -193,6 +205,7 @@ pub fn run() {
             save_note,
             create_note,
             create_folder,
+            delete_item,
             sync_root,
             get_root_status,
             search_notes,

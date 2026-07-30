@@ -350,6 +350,204 @@ describe("NotesPanel", () => {
     });
   });
 
+  describe("delete via context menu", () => {
+    it("does not show Delete on right-clicking empty space", async () => {
+      mockTrees({ [ROOT_A.id]: [] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const section = (await screen.findByText("notes")).closest("section")!;
+      const body = section.querySelector(".notes-panel__section-body")!;
+      await userEvent.pointer({ keys: "[MouseRight]", target: body });
+
+      await screen.findByRole("menuitem", { name: "New note" });
+      expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    });
+
+    it("shows a confirmation dialog before deleting a note, and does nothing on cancel", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const noteButton = await screen.findByRole("button", { name: "note.md" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: noteButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog.textContent).toMatch(/note\.md/);
+
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(invoke).not.toHaveBeenCalledWith("delete_item", expect.anything());
+      expect(await screen.findByText("note.md")).toBeDefined();
+    });
+
+    it("confirming deletes a note, calls delete_item, and refreshes the tree", async () => {
+      let listCall = 0;
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") {
+          listCall += 1;
+          return Promise.resolve(listCall === 1 ? [note("note.md", "note.md")] : []);
+        }
+        if (command === "delete_item") return Promise.resolve(undefined);
+        if (command === "get_root_status") {
+          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+        }
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const noteButton = await screen.findByRole("button", { name: "note.md" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: noteButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      expect(invoke).toHaveBeenCalledWith("delete_item", { rootId: ROOT_A.id, path: "note.md" });
+      await waitFor(() => expect(screen.queryByText("note.md")).toBeNull());
+    });
+
+    it("states recursive note and subfolder counts in a folder's confirmation dialog", async () => {
+      mockTrees({
+        [ROOT_A.id]: [
+          folder("my-folder", "my-folder", [
+            note("a.md", "my-folder/a.md"),
+            folder("nested", "my-folder/nested", [note("b.md", "my-folder/nested/b.md")]),
+          ]),
+        ],
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const folderButton = await screen.findByRole("button", { name: "my-folder" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: folderButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog.textContent).toMatch(/2 notes/);
+      expect(dialog.textContent).toMatch(/1 subfolder/);
+    });
+
+    it("confirming deletes a folder and its whole subtree via one delete_item call", async () => {
+      let listCall = 0;
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") {
+          listCall += 1;
+          return Promise.resolve(listCall === 1 ? [folder("my-folder", "my-folder", [note("a.md", "my-folder/a.md")])] : []);
+        }
+        if (command === "delete_item") return Promise.resolve(undefined);
+        if (command === "get_root_status") {
+          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+        }
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const folderButton = await screen.findByRole("button", { name: "my-folder" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: folderButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      expect(invoke).toHaveBeenCalledWith("delete_item", { rootId: ROOT_A.id, path: "my-folder" });
+      await waitFor(() => expect(screen.queryByText("my-folder")).toBeNull());
+    });
+
+    it("clears the open note when the currently open note is deleted", async () => {
+      let listCall = 0;
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") {
+          listCall += 1;
+          return Promise.resolve(listCall === 1 ? [note("open.md", "open.md")] : []);
+        }
+        if (command === "delete_item") return Promise.resolve(undefined);
+        if (command === "get_root_status") {
+          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+        }
+        return Promise.resolve(undefined);
+      });
+      const onNoteDeleted = vi.fn();
+      render(
+        <NotesPanel
+          roots={[ROOT_A]}
+          onOpenNote={noop}
+          openNote={{ rootId: ROOT_A.id, path: "open.md" }}
+          onNoteDeleted={onNoteDeleted}
+        />,
+      );
+
+      const noteButton = await screen.findByRole("button", { name: "open.md" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: noteButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(onNoteDeleted).toHaveBeenCalled());
+    });
+
+    it("clears the open note when its ancestor folder is deleted", async () => {
+      let listCall = 0;
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") {
+          listCall += 1;
+          return Promise.resolve(
+            listCall === 1 ? [folder("my-folder", "my-folder", [note("child.md", "my-folder/child.md")])] : [],
+          );
+        }
+        if (command === "delete_item") return Promise.resolve(undefined);
+        if (command === "get_root_status") {
+          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+        }
+        return Promise.resolve(undefined);
+      });
+      const onNoteDeleted = vi.fn();
+      render(
+        <NotesPanel
+          roots={[ROOT_A]}
+          onOpenNote={noop}
+          openNote={{ rootId: ROOT_A.id, path: "my-folder/child.md" }}
+          onNoteDeleted={onNoteDeleted}
+        />,
+      );
+
+      const folderButton = await screen.findByRole("button", { name: "my-folder" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: folderButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(onNoteDeleted).toHaveBeenCalled());
+    });
+
+    it("does not clear the open note when an unrelated note is deleted", async () => {
+      let listCall = 0;
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") {
+          listCall += 1;
+          return Promise.resolve(
+            listCall === 1 ? [note("open.md", "open.md"), note("other.md", "other.md")] : [note("open.md", "open.md")],
+          );
+        }
+        if (command === "delete_item") return Promise.resolve(undefined);
+        if (command === "get_root_status") {
+          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+        }
+        return Promise.resolve(undefined);
+      });
+      const onNoteDeleted = vi.fn();
+      render(
+        <NotesPanel
+          roots={[ROOT_A]}
+          onOpenNote={noop}
+          openNote={{ rootId: ROOT_A.id, path: "open.md" }}
+          onNoteDeleted={onNoteDeleted}
+        />,
+      );
+
+      const noteButton = await screen.findByRole("button", { name: "other.md" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: noteButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(screen.queryByText("other.md")).toBeNull());
+      expect(onNoteDeleted).not.toHaveBeenCalled();
+    });
+  });
+
   describe("search", () => {
     it("does not search or swap the panel below 2 characters", async () => {
       mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });

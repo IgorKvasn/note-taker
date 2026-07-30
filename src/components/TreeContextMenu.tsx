@@ -6,6 +6,13 @@ export interface ContextMenuState {
   y: number;
   rootId: string;
   dirPath: string;
+  /**
+   * The specific note/folder that was right-clicked, if any -- `null` when the
+   * click landed on empty space, which only offers the create actions above
+   * (no item to delete). Kept separate from `dirPath`, which is always the
+   * *directory* a create would target, not the clicked item itself.
+   */
+  clickedItem: { path: string; isDirectory: boolean } | null;
 }
 
 interface TreeContextMenuProps {
@@ -13,9 +20,10 @@ interface TreeContextMenuProps {
   onClose: () => void;
   onCreateNote: () => void;
   onCreateFolder: () => void;
+  onDelete: () => void;
 }
 
-export function TreeContextMenu({ state, onClose, onCreateNote, onCreateFolder }: TreeContextMenuProps) {
+export function TreeContextMenu({ state, onClose, onCreateNote, onCreateFolder, onDelete }: TreeContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,6 +57,11 @@ export function TreeContextMenu({ state, onClose, onCreateNote, onCreateFolder }
       <button type="button" role="menuitem" onClick={onCreateFolder}>
         New folder
       </button>
+      {state.clickedItem !== null && (
+        <button type="button" role="menuitem" onClick={onDelete}>
+          Delete
+        </button>
+      )}
     </div>
   );
 }
