@@ -1,14 +1,18 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { COMMAND_OPEN_NOTE, COMMAND_SAVE_NOTE, type OpenNoteResult } from "../ipc";
+import { NoteToolbar } from "./NoteToolbar";
+import { NoteView } from "./NoteView";
 import "./NoteEditor.css";
 
 /** Debounce window between the last keystroke and the autosave `save_note` call. */
 const AUTOSAVE_DEBOUNCE_MS = 600;
+
+type EditorMode = "edit" | "view";
 
 interface NoteEditorProps {
   rootId: string;
@@ -19,15 +23,18 @@ interface NoteEditorProps {
 
 /**
  * A direct CodeMirror 6 wrapper around a ref/`useEffect`, deliberately not
- * `@uiw/react-codemirror`: the formatting toolbar (a later ticket) dispatches
- * CM6 transactions straight against this view, and a wrapper library would be
- * an abstraction to reach through (spec §1, §5).
+ * `@uiw/react-codemirror`: the formatting toolbar dispatches CM6 transactions
+ * straight against this view, and a wrapper library would be an abstraction
+ * to reach through (spec §1, §5).
  */
 export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<{ rootId: string; path: string; content: string } | null>(null);
+  const [view, setView] = useState<EditorView | null>(null);
+  const [mode, setMode] = useState<EditorMode>("edit");
+  const [content, setContent] = useState("");
 
   const flushPendingSave = () => {
     if (saveTimeoutRef.current !== null) {
@@ -61,8 +68,9 @@ export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
             if (!update.docChanged) {
               return;
             }
-            const content = update.state.doc.toString();
-            pendingSaveRef.current = { rootId, path, content };
+            const updatedContent = update.state.doc.toString();
+            setContent(updatedContent);
+            pendingSaveRef.current = { rootId, path, content: updatedContent };
             if (saveTimeoutRef.current !== null) {
               clearTimeout(saveTimeoutRef.current);
             }
@@ -73,6 +81,8 @@ export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
       parent: host,
     });
     viewRef.current = view;
+    setView(view);
+    setMode("edit");
 
     invoke<OpenNoteResult>(COMMAND_OPEN_NOTE, { rootId, path })
       .then((result) => {
@@ -82,6 +92,7 @@ export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: result.content },
         });
+        setContent(result.content);
       })
       .catch(() => {
         if (!isCancelled) {
@@ -94,8 +105,31 @@ export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
       flushPendingSave();
       view.destroy();
       viewRef.current = null;
+      setView(null);
     };
   }, [rootId, path]);
 
-  return <div className="note-editor" data-testid="note-editor" ref={hostRef} />;
+  return (
+    <div className="note-editor">
+      <div className="note-editor__chrome">
+        {mode === "edit" && <NoteToolbar view={view} />}
+        <button
+          type="button"
+          className="note-editor__mode-toggle"
+          onClick={() => setMode((current) => (current === "edit" ? "view" : "edit"))}
+        >
+          {mode === "edit" ? "Preview" : "Edit"}
+        </button>
+      </div>
+      <div className="note-editor__body">
+        <div
+          className="note-editor__cm-host"
+          data-testid="note-editor"
+          ref={hostRef}
+          hidden={mode !== "edit"}
+        />
+        {mode === "view" && <NoteView content={content} />}
+      </div>
+    </div>
+  );
 }

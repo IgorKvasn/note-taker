@@ -1,0 +1,43 @@
+.note-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--surface-sunken);
+}
+
+.note-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 8px;
+  border-right: 1px solid var(--divider-color);
+}
+
+.note-toolbar__group:last-child {
+  border-right: none;
+  padding-right: 0;
+}
+
+.note-toolbar__button {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-color);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.note-toolbar__button:hover:not(:disabled) {
+  background-color: var(--surface-hover);
+  border-color: var(--border-color);
+}
+
+.note-toolbar__button:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}

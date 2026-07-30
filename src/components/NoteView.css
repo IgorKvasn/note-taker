@@ -1,0 +1,31 @@
+@import "highlight.js/styles/github.css";
+
+.note-view {
+  height: 100%;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.note-view table {
+  border-collapse: collapse;
+}
+
+.note-view th,
+.note-view td {
+  border: 1px solid var(--border-color);
+  padding: 4px 8px;
+}
+
+.note-view pre {
+  padding: 8px;
+  overflow-x: auto;
+  background-color: var(--surface-sunken);
+  border-radius: 4px;
+}
+
+.note-view blockquote {
+  margin-left: 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-muted);
+}

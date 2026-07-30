@@ -1,8 +1,45 @@
 .note-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.note-editor__chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.note-editor__mode-toggle {
+  margin: 4px 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: none;
+  color: var(--text-color);
+  cursor: pointer;
+}
+
+.note-editor__mode-toggle:hover {
+  background-color: var(--surface-hover);
+}
+
+.note-editor__body {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.note-editor__cm-host {
   height: 100%;
   overflow-y: auto;
 }
 
-.note-editor .cm-editor {
+.note-editor__cm-host .cm-editor {
+  height: 100%;
+}
+
+.note-editor__body > .note-view {
   height: 100%;
 }
