@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { COMMAND_LIST_TREE, type RootConfig, type TreeNode } from "../ipc";
+import {
+  COMMAND_CREATE_FOLDER,
+  COMMAND_CREATE_NOTE,
+  COMMAND_LIST_TREE,
+  type RootConfig,
+  type TreeNode,
+} from "../ipc";
 import "./NotesPanel.css";
 
 interface NotesPanelProps {
@@ -29,6 +35,93 @@ function isSameSelection(a: Selection | null, b: Selection): boolean {
   return a !== null && a.rootId === b.rootId && a.path === b.path;
 }
 
+/** What kind of new item a context-menu selection is about to create. */
+type CreateKind = "note" | "folder";
+
+/**
+ * Where a pending (not-yet-created) item goes: `dirPath` is the directory it
+ * will be created in (`""` for a root's top level), scoped to one root so two
+ * roots never show the same pending row.
+ */
+interface PendingCreate {
+  rootId: string;
+  dirPath: string;
+  kind: CreateKind;
+}
+
+/** Right-click target: a directory to create into, resolved from whatever was clicked. */
+interface ContextMenuState {
+  x: number;
+  y: number;
+  rootId: string;
+  dirPath: string;
+}
+
+interface InlineCreateFieldProps {
+  kind: CreateKind;
+  onConfirm: (title: string) => Promise<void>;
+  onCancel: () => void;
+  depth: number;
+}
+
+function InlineCreateField({ kind, onConfirm, onCancel, depth }: InlineCreateFieldProps) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const handleKeyDown = async (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onCancel();
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (isSubmitting) return;
+
+      setIsSubmitting(true);
+      try {
+        await onConfirm(value);
+        // On success the caller replaces this field with the real tree node;
+        // on failure it stays mounted, so only clear the error path here.
+        setError(null);
+      } catch (submitError) {
+        setError(String(submitError));
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  return (
+    <li>
+      <div className="notes-panel__inline-create" style={{ paddingLeft: `${depth * 16 + 8}px` }}>
+        <input
+          ref={inputRef}
+          type="text"
+          className="notes-panel__inline-input"
+          aria-label={kind === "note" ? "New note title" : "New folder title"}
+          value={value}
+          disabled={isSubmitting}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+      </div>
+      {error !== null && (
+        <p className="notes-panel__inline-error" role="alert">
+          {error}
+        </p>
+      )}
+    </li>
+  );
+}
+
 interface TreeNodeViewProps {
   node: TreeNode;
   rootId: string;
@@ -36,10 +129,26 @@ interface TreeNodeViewProps {
   selection: Selection | null;
   onToggleFolder: (path: string) => void;
   onOpenNote: (path: string) => void;
+  onContextMenu: (event: React.MouseEvent, dirPath: string) => void;
+  pendingCreate: PendingCreate | null;
+  onConfirmCreate: (title: string) => Promise<void>;
+  onCancelCreate: () => void;
   depth: number;
 }
 
-function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, onOpenNote, depth }: TreeNodeViewProps) {
+function TreeNodeView({
+  node,
+  rootId,
+  expandedPaths,
+  selection,
+  onToggleFolder,
+  onOpenNote,
+  onContextMenu,
+  pendingCreate,
+  onConfirmCreate,
+  onCancelCreate,
+  depth,
+}: TreeNodeViewProps) {
   if (!node.is_directory) {
     return (
       <li>
@@ -49,6 +158,7 @@ function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, 
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           data-selected={isSameSelection(selection, { rootId, path: node.path }) || undefined}
           onClick={() => onOpenNote(node.path)}
+          onContextMenu={(event) => onContextMenu(event, parentDirPath(node.path))}
         >
           {node.name}
         </button>
@@ -57,6 +167,7 @@ function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, 
   }
 
   const isExpanded = expandedPaths.has(node.path);
+  const pendingHere = pendingCreate !== null && pendingCreate.rootId === rootId && pendingCreate.dirPath === node.path;
 
   return (
     <li>
@@ -67,11 +178,12 @@ function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, 
         data-selected={isSameSelection(selection, { rootId, path: node.path }) || undefined}
         aria-expanded={isExpanded}
         onClick={() => onToggleFolder(node.path)}
+        onContextMenu={(event) => onContextMenu(event, node.path)}
       >
         <span className="notes-panel__disclosure" data-expanded={isExpanded || undefined} aria-hidden="true" />
         {node.name}
       </button>
-      {isExpanded && node.children.length > 0 && (
+      {isExpanded && (node.children.length > 0 || pendingHere) && (
         <ul className="notes-panel__list">
           {node.children.map((child) => (
             <TreeNodeView
@@ -82,13 +194,30 @@ function TreeNodeView({ node, rootId, expandedPaths, selection, onToggleFolder, 
               selection={selection}
               onToggleFolder={onToggleFolder}
               onOpenNote={onOpenNote}
+              onContextMenu={onContextMenu}
+              pendingCreate={pendingCreate}
+              onConfirmCreate={onConfirmCreate}
+              onCancelCreate={onCancelCreate}
               depth={depth + 1}
             />
           ))}
+          {pendingHere && (
+            <InlineCreateField
+              kind={pendingCreate.kind}
+              onConfirm={onConfirmCreate}
+              onCancel={onCancelCreate}
+              depth={depth + 1}
+            />
+          )}
         </ul>
       )}
     </li>
   );
+}
+
+function parentDirPath(path: string): string {
+  const lastSlash = path.lastIndexOf("/");
+  return lastSlash === -1 ? "" : path.slice(0, lastSlash);
 }
 
 interface RootSectionProps {
@@ -99,6 +228,10 @@ interface RootSectionProps {
   refreshToken: number;
   initialExpandedPaths: string[];
   onExpandedPathsChange: (rootId: string, expandedPaths: string[]) => void;
+  onContextMenu: (event: React.MouseEvent, rootId: string, dirPath: string) => void;
+  pendingCreate: PendingCreate | null;
+  onConfirmCreate: (rootId: string, title: string) => Promise<void>;
+  onCancelCreate: () => void;
 }
 
 function RootSection({
@@ -109,6 +242,10 @@ function RootSection({
   refreshToken,
   initialExpandedPaths,
   onExpandedPathsChange,
+  onContextMenu,
+  pendingCreate,
+  onConfirmCreate,
+  onCancelCreate,
 }: RootSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [tree, setTree] = useState<TreeNode[] | null>(null);
@@ -132,6 +269,22 @@ function RootSection({
   useEffect(() => {
     loadTree();
   }, [loadTree, refreshToken]);
+
+  useEffect(() => {
+    if (pendingCreate !== null && pendingCreate.rootId === root.id && pendingCreate.dirPath !== "") {
+      setExpandedPaths((current) => {
+        if (current.has(pendingCreate.dirPath)) return current;
+        const next = new Set(current);
+        next.add(pendingCreate.dirPath);
+        onExpandedPathsChange(root.id, Array.from(next));
+        return next;
+      });
+    }
+    // Only re-run when a new pending create targets this root's directories --
+    // expandedPaths/onExpandedPathsChange intentionally excluded to avoid
+    // re-collapsing state on every toggle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingCreate, root.id]);
 
   const toggleFolder = useCallback(
     (path: string) => {
@@ -158,8 +311,20 @@ function RootSection({
     [onOpenNote, onSelect, root.id],
   );
 
+  const pendingAtTopLevel = pendingCreate !== null && pendingCreate.rootId === root.id && pendingCreate.dirPath === "";
+
   return (
-    <section className="notes-panel__section">
+    <section
+      className="notes-panel__section"
+      onContextMenu={(event) => {
+        // Only empty space within the section (not a descendant item/button)
+        // targets the root's top level -- item-level handlers already stopped
+        // propagation for their own targets.
+        if (event.target === event.currentTarget) {
+          onContextMenu(event, root.id, "");
+        }
+      }}
+    >
       <button
         type="button"
         className="notes-panel__section-header"
@@ -171,7 +336,14 @@ function RootSection({
       </button>
 
       {isExpanded && (
-        <>
+        <div
+          className="notes-panel__section-body"
+          onContextMenu={(event) => {
+            if (event.target === event.currentTarget) {
+              onContextMenu(event, root.id, "");
+            }
+          }}
+        >
           {error !== null && (
             <p className="notes-panel__error" role="alert">
               Couldn't read this folder: {error}
@@ -188,15 +360,80 @@ function RootSection({
                   selection={selection}
                   onToggleFolder={toggleFolder}
                   onOpenNote={openNote}
+                  onContextMenu={(event, dirPath) => onContextMenu(event, root.id, dirPath)}
+                  pendingCreate={pendingCreate}
+                  onConfirmCreate={(title) => onConfirmCreate(root.id, title)}
+                  onCancelCreate={onCancelCreate}
                   depth={0}
                 />
               ))}
+              {pendingAtTopLevel && (
+                <InlineCreateField
+                  kind={pendingCreate.kind}
+                  onConfirm={(title) => onConfirmCreate(root.id, title)}
+                  onCancel={onCancelCreate}
+                  depth={0}
+                />
+              )}
             </ul>
           )}
-        </>
+        </div>
       )}
     </section>
   );
+}
+
+interface ContextMenuProps {
+  state: ContextMenuState;
+  onClose: () => void;
+  onCreateNote: () => void;
+  onCreateFolder: () => void;
+}
+
+function ContextMenu({ state, onClose, onCreateNote, onCreateFolder }: ContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (menuRef.current !== null && !menuRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={menuRef}
+      className="notes-panel__context-menu"
+      role="menu"
+      style={{ top: state.y, left: state.x }}
+    >
+      <button type="button" role="menuitem" onClick={onCreateNote}>
+        New note
+      </button>
+      <button type="button" role="menuitem" onClick={onCreateFolder}>
+        New folder
+      </button>
+    </div>
+  );
+}
+
+function withMdExtension(title: string): string {
+  return title.endsWith(".md") ? title : `${title}.md`;
+}
+
+function joinPath(dirPath: string, name: string): string {
+  return dirPath === "" ? name : `${dirPath}/${name}`;
 }
 
 export function NotesPanel({
@@ -207,6 +444,8 @@ export function NotesPanel({
 }: NotesPanelProps) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
 
   const refresh = useCallback(() => setRefreshToken((token) => token + 1), []);
 
@@ -215,6 +454,46 @@ export function NotesPanel({
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
   }, [refresh]);
+
+  const handleContextMenu = useCallback((event: React.MouseEvent, rootId: string, dirPath: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ x: event.clientX, y: event.clientY, rootId, dirPath });
+  }, []);
+
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const startCreate = useCallback(
+    (kind: CreateKind) => {
+      if (contextMenu === null) return;
+      setPendingCreate({ rootId: contextMenu.rootId, dirPath: contextMenu.dirPath, kind });
+      setContextMenu(null);
+    },
+    [contextMenu],
+  );
+
+  const cancelCreate = useCallback(() => setPendingCreate(null), []);
+
+  const confirmCreate = useCallback(
+    async (rootId: string, title: string) => {
+      if (pendingCreate === null) return;
+
+      const trimmedTitle = title.trim();
+      if (trimmedTitle === "") {
+        throw new Error("title cannot be empty");
+      }
+
+      const command = pendingCreate.kind === "note" ? COMMAND_CREATE_NOTE : COMMAND_CREATE_FOLDER;
+      const name = pendingCreate.kind === "note" ? withMdExtension(trimmedTitle) : trimmedTitle;
+      const path = joinPath(pendingCreate.dirPath, name);
+
+      await invoke(command, { rootId, path });
+
+      setPendingCreate(null);
+      refresh();
+    },
+    [pendingCreate, refresh],
+  );
 
   return (
     <div className="notes-panel" data-testid="notes-panel">
@@ -233,8 +512,20 @@ export function NotesPanel({
           refreshToken={refreshToken}
           initialExpandedPaths={expandedPathsByRoot[root.id] ?? []}
           onExpandedPathsChange={onExpandedPathsChange}
+          onContextMenu={handleContextMenu}
+          pendingCreate={pendingCreate}
+          onConfirmCreate={confirmCreate}
+          onCancelCreate={cancelCreate}
         />
       ))}
+      {contextMenu !== null && (
+        <ContextMenu
+          state={contextMenu}
+          onClose={closeContextMenu}
+          onCreateNote={() => startCreate("note")}
+          onCreateFolder={() => startCreate("folder")}
+        />
+      )}
     </div>
   );
 }

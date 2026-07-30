@@ -13,6 +13,8 @@ export const COMMAND_SHOW_CONFIG_ERROR = "show_config_error";
 export const COMMAND_LIST_TREE = "list_tree";
 export const COMMAND_OPEN_NOTE = "open_note";
 export const COMMAND_SAVE_NOTE = "save_note";
+export const COMMAND_CREATE_NOTE = "create_note";
+export const COMMAND_CREATE_FOLDER = "create_folder";
 export const COMMAND_GET_STATE = "get_state";
 export const COMMAND_SAVE_STATE = "save_state";
 
