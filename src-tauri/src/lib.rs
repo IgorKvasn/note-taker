@@ -149,6 +149,21 @@ fn trigger_sync_for_root(app: &AppHandle, root_id: &str) {
     sync::trigger_sync(app.clone(), manager, root);
 }
 
+/// Startup catchup (issue #25): reactive-only sync leaves an interrupted push
+/// with nothing to ever retry it, so every configured root gets the same
+/// `trigger_sync` chain kicked off as `setup` returns. Each root's git work
+/// runs on `trigger_sync`'s background task, so this call itself never blocks
+/// the window from appearing or the last-open note from restoring, and one
+/// root's failure can't stop another's from running -- they're entirely
+/// independent background tasks. `git push` is idempotent, so calling this
+/// again on a later launch (or if it somehow ran twice) is harmless.
+fn run_startup_catchup(app: &AppHandle) {
+    let manager = app.state::<Arc<SyncManager>>().inner().clone();
+    for root in config::all_root_configs() {
+        sync::trigger_sync(app.clone(), manager.clone(), root);
+    }
+}
+
 /// Stateless: `seq` is not tracked here, only echoed back on every result so
 /// the frontend can discard a response overtaken by a newer request (spec §8).
 /// Infallible by design -- a missing/unreadable root is skipped silently
@@ -236,6 +251,8 @@ pub fn run() {
 
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| handle_menu_event(app, event.id().0.as_str()));
+
+            run_startup_catchup(app.handle());
 
             Ok(())
         })

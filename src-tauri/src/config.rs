@@ -86,20 +86,26 @@ pub fn find_root_config(root_id: &str) -> Result<RootConfig, String> {
         .ok_or_else(|| format!("no root with id {root_id}"))
 }
 
-/// Resolves every configured root to its `(id, path)` pair, for commands like
-/// `search_notes` that span all roots at once rather than addressing one by ID
-/// (spec §9.4). An unreadable/missing config yields no roots rather than an
-/// error -- a command spanning all roots has nothing sensible to report a
-/// single error for, and an empty root list just means an empty result set.
-pub fn all_root_paths() -> Vec<(String, PathBuf)> {
+/// Resolves every configured root's full entry, for callers that need to act on
+/// every root at once rather than addressing one by ID (e.g. startup catchup).
+/// An unreadable/missing config yields no roots rather than an error -- a
+/// command spanning all roots has nothing sensible to report a single error
+/// for, and an empty root list just means an empty result set.
+pub fn all_root_configs() -> Vec<RootConfig> {
     match get_config() {
-        ConfigOutcome::Ok { config } => config
-            .roots
-            .into_iter()
-            .map(|root| (root.id, PathBuf::from(root.path)))
-            .collect(),
+        ConfigOutcome::Ok { config } => config.roots,
         _ => Vec::new(),
     }
+}
+
+/// Resolves every configured root to its `(id, path)` pair, for commands like
+/// `search_notes` that span all roots at once rather than addressing one by ID
+/// (spec §9.4).
+pub fn all_root_paths() -> Vec<(String, PathBuf)> {
+    all_root_configs()
+        .into_iter()
+        .map(|root| (root.id, PathBuf::from(root.path)))
+        .collect()
 }
 
 /// Resolves `(root_id, relative_path)` to an absolute path, rejecting any result
