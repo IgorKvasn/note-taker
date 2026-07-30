@@ -16,6 +16,7 @@ export const COMMAND_OPEN_NOTE = "open_note";
 export const COMMAND_SAVE_NOTE = "save_note";
 export const COMMAND_CREATE_NOTE = "create_note";
 export const COMMAND_CREATE_FOLDER = "create_folder";
+export const COMMAND_DELETE_ITEM = "delete_item";
 export const COMMAND_SEARCH_NOTES = "search_notes";
 export const COMMAND_GET_STATE = "get_state";
 export const COMMAND_SAVE_STATE = "save_state";

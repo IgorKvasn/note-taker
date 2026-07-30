@@ -126,6 +126,7 @@ export function App() {
   }, [dismissLocalOnlyNotice]);
 
   const handleOpenNoteError = useCallback(() => setOpenNote(null), []);
+  const handleNoteDeleted = useCallback(() => setOpenNote(null), []);
 
   const closeAbout = useCallback(() => setIsAboutOpen(false), []);
   const closeSettings = useCallback(() => setIsSettingsOpen(false), []);
@@ -174,6 +175,8 @@ export function App() {
             onOpenNote={openNoteHandler}
             expandedPathsByRoot={uiState.expanded_paths}
             onExpandedPathsChange={setExpandedPaths}
+            openNote={openNote}
+            onNoteDeleted={handleNoteDeleted}
           />
         }
         right={

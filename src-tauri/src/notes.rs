@@ -165,6 +165,20 @@ pub fn create_folder(path: &Path) -> Result<(), String> {
     fs::create_dir(parent.join(normalized_name)).map_err(|error| error.to_string())
 }
 
+/// Permanently deletes the note or folder at `path` -- a note via
+/// `remove_file`, a folder and its whole subtree via `remove_dir_all`. There is
+/// no app-level trash (issue #23): the only recovery path is git history, via
+/// the sync chain's `git add -A` picking up the removal on the next sync.
+pub fn delete_item(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+
+    if metadata.is_dir() {
+        fs::remove_dir_all(path).map_err(|error| error.to_string())
+    } else {
+        fs::remove_file(path).map_err(|error| error.to_string())
+    }
+}
+
 /// Strips a raw file's leading `---`-delimited YAML frontmatter block, keeping
 /// only the `id` extraction private to this module -- search (§8) needs the
 /// body without frontmatter but has no business reading the ID.
@@ -467,5 +481,50 @@ mod tests {
         create_folder(&dir.path().join("new-folder")).unwrap();
 
         assert!(!dir.path().join(".git").exists());
+    }
+
+    #[test]
+    fn delete_item_removes_a_note_file() {
+        let dir = TempDir::new().unwrap();
+        let path = write_file(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
+
+        delete_item(&path).unwrap();
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn delete_item_removes_a_folder_and_its_whole_subtree() {
+        let dir = TempDir::new().unwrap();
+        let folder_path = dir.path().join("my-folder");
+        fs::create_dir(&folder_path).unwrap();
+        fs::create_dir(folder_path.join("nested-folder")).unwrap();
+        fs::write(folder_path.join("child.md"), "content").unwrap();
+        fs::write(folder_path.join("nested-folder/grandchild.md"), "content").unwrap();
+
+        delete_item(&folder_path).unwrap();
+
+        assert!(!folder_path.exists());
+    }
+
+    #[test]
+    fn delete_item_leaves_siblings_untouched() {
+        let dir = TempDir::new().unwrap();
+        let target = write_file(&dir, "target.md", "content");
+        let sibling = write_file(&dir, "sibling.md", "content");
+
+        delete_item(&target).unwrap();
+
+        assert!(!target.exists());
+        assert!(sibling.exists());
+    }
+
+    #[test]
+    fn delete_item_errors_on_a_nonexistent_path_and_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+
+        let result = delete_item(&dir.path().join("does-not-exist.md"));
+
+        assert!(result.is_err());
     }
 }
