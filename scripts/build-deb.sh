@@ -29,7 +29,7 @@ npm ci
 npm run test
 npm run tauri build -- --bundles deb
 
-deb_path="$(find src-tauri/target/release/bundle/deb -name '*.deb' -print -quit)"
+deb_path="$(find src-tauri/target/release/bundle/deb -name '*.deb' -print -quit 2>/dev/null || true)"
 if [[ -z "$deb_path" ]]; then
   echo "error: no .deb produced under src-tauri/target/release/bundle/deb" >&2
   exit 1
@@ -43,8 +43,15 @@ fi
 depends_line="$(dpkg-deb -f "$deb_path" Depends)"
 echo "Depends: $depends_line"
 
-IFS=', ' read -r -a depends_entries <<<"$depends_line"
-duplicates="$(printf '%s\n' "${depends_entries[@]}" | sort | uniq -d)"
+IFS=',' read -r -a depends_raw <<<"$depends_line"
+depends_names=()
+for entry in "${depends_raw[@]}"; do
+  entry="${entry#"${entry%%[![:space:]]*}"}"
+  entry="${entry%"${entry##*[![:space:]]}"}"
+  depends_names+=("${entry%% *}")
+done
+
+duplicates="$(printf '%s\n' "${depends_names[@]}" | sort | uniq -d)"
 if [[ -n "$duplicates" ]]; then
   echo "error: duplicate entries in Depends: $duplicates" >&2
   exit 1
@@ -54,8 +61,8 @@ fi
 # `Provides` -- a name match here does not prove the .deb installs. See spec.md §10.
 for required in libwebkit2gtk-4.1-0 libgtk-3-0 git; do
   found=0
-  for entry in "${depends_entries[@]}"; do
-    [[ "$entry" == "$required" ]] && found=1 && break
+  for name in "${depends_names[@]}"; do
+    [[ "$name" == "$required" ]] && found=1 && break
   done
   if [[ "$found" -eq 0 ]]; then
     echo "error: Depends is missing required package: $required" >&2
