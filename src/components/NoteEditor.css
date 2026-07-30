@@ -66,3 +66,54 @@
 .note-editor__body > .note-view {
   height: 100%;
 }
+
+.cm-live-preview-marker {
+  color: var(--text-muted);
+}
+
+.cm-live-preview-strong {
+  font-weight: 700;
+}
+
+.cm-live-preview-emphasis {
+  font-style: italic;
+}
+
+.cm-live-preview-strikethrough {
+  text-decoration: line-through;
+}
+
+.cm-live-preview-code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  background-color: var(--surface-sunken);
+  border-radius: 3px;
+}
+
+.cm-live-preview-heading {
+  font-weight: 700;
+}
+
+.cm-live-preview-heading-1 {
+  font-size: 1.6em;
+}
+
+.cm-live-preview-heading-2 {
+  font-size: 1.4em;
+}
+
+.cm-live-preview-heading-3 {
+  font-size: 1.2em;
+}
+
+.cm-live-preview-heading-4 {
+  font-size: 1.1em;
+}
+
+.cm-live-preview-heading-5,
+.cm-live-preview-heading-6 {
+  font-size: 1.05em;
+}
+
+.cm-live-preview-blockquote {
+  font-style: italic;
+}

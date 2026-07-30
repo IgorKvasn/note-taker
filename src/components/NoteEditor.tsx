@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Annotation, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   COMMAND_MARK_RESOLVED,
   COMMAND_OPEN_NOTE,
@@ -13,6 +13,7 @@ import {
   type OpenNoteResult,
   type SyncStatusEvent,
 } from "../ipc";
+import { markdownLivePreview } from "./markdownLivePreview";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteView } from "./NoteView";
 import "./NoteEditor.css";
@@ -114,7 +115,8 @@ export function NoteEditor({ rootId, path, onOpenError, scrollToOffset }: NoteEd
         extensions: [
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
-          markdown(),
+          markdown({ base: markdownLanguage }),
+          markdownLivePreview,
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || update.transactions.some((tr) => tr.annotation(remoteContentLoad))) {
               return;
