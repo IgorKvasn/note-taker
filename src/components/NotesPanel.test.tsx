@@ -730,6 +730,31 @@ describe("NotesPanel", () => {
       expect(await screen.findByText("child.md")).toBeDefined();
     });
 
+    it("shows no clear button when the query is empty", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+      await screen.findByText("note.md");
+
+      expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+    });
+
+    it("clicking the clear button empties the query and restores the tree", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] }, [searchResult()]);
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+      await screen.findByText("note.md");
+
+      const input = screen.getByPlaceholderText("Search notes");
+      await userEvent.type(input, "ab");
+      await screen.findByTestId("search-results");
+
+      await userEvent.click(screen.getByRole("button", { name: "Clear search" }));
+
+      expect(screen.queryByTestId("search-results")).toBeNull();
+      expect(await screen.findByText("note.md")).toBeDefined();
+      expect(input).toHaveProperty("value", "");
+      expect(document.activeElement).toBe(input);
+    });
+
     it("clicking a result opens the note and leaves the search panel intact", async () => {
       const result = searchResult();
       mockTrees({ [ROOT_A.id]: [] }, [result]);

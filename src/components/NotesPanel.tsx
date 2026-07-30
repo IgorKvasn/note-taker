@@ -488,6 +488,7 @@ export function NotesPanel({
   const [moveError, setMoveError] = useState<string | null>(null);
   const { query, results, setQuery, clear: clearSearch } = useSearch();
   const isSearchMode = results !== null;
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Root IDs a conflict toast has already fired for (issue #26: "a one-time
   // toast per affected root"). A ref, not state -- recording it must never
@@ -529,6 +530,11 @@ export function NotesPanel({
     },
     [clearSearch],
   );
+
+  const handleClearSearch = useCallback(() => {
+    clearSearch();
+    searchInputRef.current?.focus();
+  }, [clearSearch]);
 
   const selectSearchResult = useCallback(
     (result: SearchResult) => {
@@ -713,14 +719,27 @@ export function NotesPanel({
   return (
     <div className="notes-panel" data-testid="notes-panel" onContextMenu={handlePanelContextMenu}>
       <div className="notes-panel__toolbar">
-        <input
-          type="text"
-          className="notes-panel__search-input"
-          placeholder="Search notes"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={handleEscapeKey}
-        />
+        <div className="notes-panel__search-wrapper">
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="notes-panel__search-input"
+            placeholder="Search notes"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={handleEscapeKey}
+          />
+          {query !== "" && (
+            <button
+              type="button"
+              className="notes-panel__search-clear"
+              aria-label="Clear search"
+              onClick={handleClearSearch}
+            >
+              ×
+            </button>
+          )}
+        </div>
         <button type="button" className="notes-panel__refresh" onClick={refresh}>
           Refresh
         </button>
