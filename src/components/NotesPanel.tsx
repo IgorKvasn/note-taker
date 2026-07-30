@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   COMMAND_CREATE_FOLDER,
@@ -7,6 +7,8 @@ import {
   type RootConfig,
   type TreeNode,
 } from "../ipc";
+import { InlineCreateField, type CreateKind } from "./InlineCreateField";
+import { TreeContextMenu, type ContextMenuState } from "./TreeContextMenu";
 import "./NotesPanel.css";
 
 interface NotesPanelProps {
@@ -35,9 +37,6 @@ function isSameSelection(a: Selection | null, b: Selection): boolean {
   return a !== null && a.rootId === b.rootId && a.path === b.path;
 }
 
-/** What kind of new item a context-menu selection is about to create. */
-type CreateKind = "note" | "folder";
-
 /**
  * Where a pending (not-yet-created) item goes: `dirPath` is the directory it
  * will be created in (`""` for a root's top level), scoped to one root so two
@@ -47,79 +46,6 @@ interface PendingCreate {
   rootId: string;
   dirPath: string;
   kind: CreateKind;
-}
-
-/** Right-click target: a directory to create into, resolved from whatever was clicked. */
-interface ContextMenuState {
-  x: number;
-  y: number;
-  rootId: string;
-  dirPath: string;
-}
-
-interface InlineCreateFieldProps {
-  kind: CreateKind;
-  onConfirm: (title: string) => Promise<void>;
-  onCancel: () => void;
-  depth: number;
-}
-
-function InlineCreateField({ kind, onConfirm, onCancel, depth }: InlineCreateFieldProps) {
-  const [value, setValue] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const handleKeyDown = async (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onCancel();
-      return;
-    }
-
-    if (event.key === "Enter") {
-      event.preventDefault();
-      if (isSubmitting) return;
-
-      setIsSubmitting(true);
-      try {
-        await onConfirm(value);
-        // On success the caller replaces this field with the real tree node;
-        // on failure it stays mounted, so only clear the error path here.
-        setError(null);
-      } catch (submitError) {
-        setError(String(submitError));
-      } finally {
-        setIsSubmitting(false);
-      }
-    }
-  };
-
-  return (
-    <li>
-      <div className="notes-panel__inline-create" style={{ paddingLeft: `${depth * 16 + 8}px` }}>
-        <input
-          ref={inputRef}
-          type="text"
-          className="notes-panel__inline-input"
-          aria-label={kind === "note" ? "New note title" : "New folder title"}
-          value={value}
-          disabled={isSubmitting}
-          onChange={(event) => setValue(event.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-      </div>
-      {error !== null && (
-        <p className="notes-panel__inline-error" role="alert">
-          {error}
-        </p>
-      )}
-    </li>
-  );
 }
 
 interface TreeNodeViewProps {
@@ -383,51 +309,6 @@ function RootSection({
   );
 }
 
-interface ContextMenuProps {
-  state: ContextMenuState;
-  onClose: () => void;
-  onCreateNote: () => void;
-  onCreateFolder: () => void;
-}
-
-function ContextMenu({ state, onClose, onCreateNote, onCreateFolder }: ContextMenuProps) {
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handlePointerDown = (event: MouseEvent) => {
-      if (menuRef.current !== null && !menuRef.current.contains(event.target as Node)) {
-        onClose();
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [onClose]);
-
-  return (
-    <div
-      ref={menuRef}
-      className="notes-panel__context-menu"
-      role="menu"
-      style={{ top: state.y, left: state.x }}
-    >
-      <button type="button" role="menuitem" onClick={onCreateNote}>
-        New note
-      </button>
-      <button type="button" role="menuitem" onClick={onCreateFolder}>
-        New folder
-      </button>
-    </div>
-  );
-}
-
 function withMdExtension(title: string): string {
   return title.endsWith(".md") ? title : `${title}.md`;
 }
@@ -519,7 +400,7 @@ export function NotesPanel({
         />
       ))}
       {contextMenu !== null && (
-        <ContextMenu
+        <TreeContextMenu
           state={contextMenu}
           onClose={closeContextMenu}
           onCreateNote={() => startCreate("note")}
