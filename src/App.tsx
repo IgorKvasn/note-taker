@@ -7,6 +7,7 @@ import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { SplitPane } from "./components/SplitPane";
 import { useUiState } from "./hooks/useUiState";
+import { isDescendantPath } from "./paths";
 import {
   COMMAND_GET_APP_VERSION,
   COMMAND_GET_CONFIG,
@@ -49,15 +50,9 @@ export function App() {
   // folder) is renamed or moved elsewhere in the tree.
   const notePathChangedHandler = useCallback(
     (rootId: string, fromPath: string, toPath: string) => {
-      if (openNote === null || openNote.rootId !== rootId) return;
+      if (openNote === null || openNote.rootId !== rootId || !isDescendantPath(openNote.path, fromPath)) return;
 
-      let newPath: string | null = null;
-      if (openNote.path === fromPath) {
-        newPath = toPath;
-      } else if (openNote.path.startsWith(`${fromPath}/`)) {
-        newPath = toPath + openNote.path.slice(fromPath.length);
-      }
-      if (newPath === null) return;
+      const newPath = toPath + openNote.path.slice(fromPath.length);
 
       setOpenNote({ ...openNote, path: newPath });
       setLastOpenNote({ root_id: rootId, path: newPath });

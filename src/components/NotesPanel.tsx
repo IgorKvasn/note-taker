@@ -11,6 +11,7 @@ import {
   type TreeNode,
 } from "../ipc";
 import { useSearch } from "../hooks/useSearch";
+import { isDescendantPath } from "../paths";
 import { countContents } from "./countContents";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { InlineCreateField, type CreateKind } from "./InlineCreateField";
@@ -83,10 +84,6 @@ interface PendingRename {
   rootId: string;
   path: string;
   isDirectory: boolean;
-}
-
-function isDescendantPath(candidate: string, ancestor: string): boolean {
-  return candidate === ancestor || candidate.startsWith(`${ancestor}/`);
 }
 
 interface TreeNodeViewProps {
@@ -575,12 +572,10 @@ export function NotesPanel({
 
   const cancelDelete = useCallback(() => setPendingDelete(null), []);
 
-  /** A deleted note/folder is or contains the currently open note when its path is a prefix of the open note's path
-   * (an exact match for a deleted note, or `folderPath/` for a note nested under a deleted folder). */
   const deletionClearsOpenNote = useCallback(
     (rootId: string, deletedPath: string) => {
       if (openNote === null || openNote.rootId !== rootId) return false;
-      return openNote.path === deletedPath || openNote.path.startsWith(`${deletedPath}/`);
+      return isDescendantPath(openNote.path, deletedPath);
     },
     [openNote],
   );
