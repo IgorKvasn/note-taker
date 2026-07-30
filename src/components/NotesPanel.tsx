@@ -5,16 +5,23 @@ import {
   COMMAND_CREATE_NOTE,
   COMMAND_LIST_TREE,
   type RootConfig,
+  type SearchResult,
   type TreeNode,
 } from "../ipc";
+import { useSearch } from "../hooks/useSearch";
 import { InlineCreateField, type CreateKind } from "./InlineCreateField";
 import { RootSyncIndicator } from "./RootSyncIndicator";
+import { SearchResultsList } from "./SearchResultsList";
 import { TreeContextMenu, type ContextMenuState } from "./TreeContextMenu";
 import "./NotesPanel.css";
 
 interface NotesPanelProps {
   roots: RootConfig[];
-  onOpenNote: (rootId: string, path: string) => void;
+  /**
+   * `scrollToOffset` is set only when opening from a search result click, to
+   * scroll the editor to the first match (spec §8); a tree click omits it.
+   */
+  onOpenNote: (rootId: string, path: string, scrollToOffset?: number) => void;
   /** Persisted expanded folder paths, keyed by root ID. */
   expandedPathsByRoot?: Record<string, string[]>;
   onExpandedPathsChange?: (rootId: string, expandedPaths: string[]) => void;
@@ -329,6 +336,8 @@ export function NotesPanel({
   const [refreshToken, setRefreshToken] = useState(0);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
+  const { query, results, setQuery, clear: clearSearch } = useSearch();
+  const isSearchMode = results !== null;
 
   const refresh = useCallback(() => setRefreshToken((token) => token + 1), []);
 
@@ -337,6 +346,22 @@ export function NotesPanel({
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
   }, [refresh]);
+
+  const handleEscapeKey = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        clearSearch();
+      }
+    },
+    [clearSearch],
+  );
+
+  const selectSearchResult = useCallback(
+    (result: SearchResult) => {
+      onOpenNote(result.root_id, result.path, result.first_match_offset ?? undefined);
+    },
+    [onOpenNote],
+  );
 
   const handleContextMenu = useCallback((event: React.MouseEvent, rootId: string, dirPath: string) => {
     event.preventDefault();
@@ -381,26 +406,39 @@ export function NotesPanel({
   return (
     <div className="notes-panel" data-testid="notes-panel">
       <div className="notes-panel__toolbar">
+        <input
+          type="text"
+          className="notes-panel__search-input"
+          placeholder="Search notes"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={handleEscapeKey}
+        />
         <button type="button" className="notes-panel__refresh" onClick={refresh}>
           Refresh
         </button>
       </div>
-      {roots.map((root) => (
-        <RootSection
-          key={root.id}
-          root={root}
-          selection={selection}
-          onSelect={setSelection}
-          onOpenNote={onOpenNote}
-          refreshToken={refreshToken}
-          initialExpandedPaths={expandedPathsByRoot[root.id] ?? []}
-          onExpandedPathsChange={onExpandedPathsChange}
-          onContextMenu={handleContextMenu}
-          pendingCreate={pendingCreate}
-          onConfirmCreate={confirmCreate}
-          onCancelCreate={cancelCreate}
-        />
-      ))}
+      {isSearchMode && <SearchResultsList results={results} roots={roots} onSelect={selectSearchResult} />}
+      {/* Kept mounted (just hidden) rather than swapped out entirely while searching,
+          so each RootSection's expand/collapse state survives clearing the query. */}
+      <div hidden={isSearchMode}>
+        {roots.map((root) => (
+          <RootSection
+            key={root.id}
+            root={root}
+            selection={selection}
+            onSelect={setSelection}
+            onOpenNote={onOpenNote}
+            refreshToken={refreshToken}
+            initialExpandedPaths={expandedPathsByRoot[root.id] ?? []}
+            onExpandedPathsChange={onExpandedPathsChange}
+            onContextMenu={handleContextMenu}
+            pendingCreate={pendingCreate}
+            onConfirmCreate={confirmCreate}
+            onCancelCreate={cancelCreate}
+          />
+        ))}
+      </div>
       {contextMenu !== null && (
         <TreeContextMenu
           state={contextMenu}

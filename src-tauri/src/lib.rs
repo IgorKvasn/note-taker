@@ -1,5 +1,6 @@
 mod config;
 mod notes;
+mod search;
 mod state;
 mod sync;
 mod tree;
@@ -13,6 +14,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use config::{Config, ConfigOutcome, RootDraft, RootValidation};
 use notes::OpenNoteResult;
+use search::SearchResult;
 use state::UiState;
 use sync::{RootStatus, SyncManager};
 use tree::TreeNode;
@@ -124,6 +126,14 @@ fn trigger_sync_for_root(app: &AppHandle, root_id: &str) {
     sync::trigger_sync(app.clone(), manager, root);
 }
 
+/// Stateless: `seq` is not tracked here, only echoed back on every result so
+/// the frontend can discard a response overtaken by a newer request (spec §8).
+#[tauri::command]
+fn search_notes(query: String, seq: u64) -> Vec<SearchResult> {
+    let roots = config::all_root_paths();
+    search::search_notes(&query, seq, &roots)
+}
+
 #[tauri::command]
 fn get_state() -> UiState {
     state::get_state()
@@ -181,6 +191,7 @@ pub fn run() {
             create_folder,
             sync_root,
             get_root_status,
+            search_notes,
             get_state,
             save_state,
         ])

@@ -165,6 +165,13 @@ pub fn create_folder(path: &Path) -> Result<(), String> {
     fs::create_dir(parent.join(normalized_name)).map_err(|error| error.to_string())
 }
 
+/// Strips a raw file's leading `---`-delimited YAML frontmatter block, keeping
+/// only the `id` extraction private to this module -- search (§8) needs the
+/// body without frontmatter but has no business reading the ID.
+pub fn strip_frontmatter(raw: &str) -> &str {
+    split_frontmatter(raw).1
+}
+
 /// Splits a raw file's leading `---`-delimited YAML frontmatter block from its
 /// body, returning the `id` field if the block exists and parses. Absence of a
 /// well-formed block (no delimiters, or no `id` key) is not an error -- it just
