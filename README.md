@@ -17,7 +17,7 @@ npm install
 npm run tauri dev
 ```
 
-Build requirements on Ubuntu:
+Build requirements on Ubuntu 26.04:
 
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev build-essential curl file \
@@ -38,9 +38,11 @@ cd src-tauri && cargo test        # backend + config invariants
 ./scripts/build-deb.sh
 ```
 
-Releases must be built on **Ubuntu 22.04**: `libwebkit2gtk-4.1-0` is absent on
-20.04 and present on 22.04 and 24.04, so a package built on 22.04 covers both
-supported releases while one built on a newer Ubuntu links against a newer glibc.
+Releases must be built on **Ubuntu 26.04**, the only supported release. The
+`.deb` links against 26.04's glibc and is *not* installable on 22.04 or 24.04;
+those releases are no longer supported as build hosts or install targets. The
+script therefore fails on a non-26.04 host — set `ALLOW_ANY_UBUNTU=1` to build
+anyway for local testing, but the artifact is not releasable.
 
 The version lives in `src-tauri/Cargo.toml` only and is deliberately omitted from
 `tauri.conf.json`. Ship plain `MAJOR.MINOR.PATCH` versions — Debian reads the

@@ -1,5 +1,21 @@
 # `.deb` packaging for a Tauri v2 app on Ubuntu
 
+> **Dated research snapshot — partly superseded, kept as-is for provenance.**
+> Written when 22.04/24.04 were the support targets and against an earlier
+> tauri-cli. Two findings below no longer match observed behaviour; see §10 of
+> [`../spec.md`](../spec.md) for the current, re-verified position
+> ([#35](https://github.com/IgorKvasn/note-taker/issues/35)):
+>
+> - **Q2's "does not auto-populate `Depends` at all" is wrong for tauri-cli 2.11.4.**
+>   A real 26.04 build with `depends: ["git"]` shipped
+>   `Depends: git, libwebkit2gtk-4.1-0, libgtk-3-0` — the webkit/gtk pair *is*
+>   injected, with no dedup, so declaring either ourselves duplicates it.
+> - **The 22.04 floor no longer applies.** Ubuntu 26.04 is the only supported
+>   release. Also, `libgtk-3-0` is virtual on 26.04, satisfied via
+>   `libgtk-3-0t64`'s `Provides`.
+>
+> Everything else here (Q1, Q3, Q4) has not been re-verified against 26.04.
+
 ## Recommendation / summary
 
 **Q1 — Build tooling.** Use `tauri build`'s built-in bundler (`tauri-bundler`) with `"targets": ["deb"]`. It generates deb, rpm and appimage on Linux and writes the `.desktop` file from a Handlebars template you can override. `cargo-deb` is *not* needed, but it is not purely redundant either — it is the only one of the two that derives `Depends` automatically via `dpkg-shlibdeps`.

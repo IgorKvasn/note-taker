@@ -315,8 +315,9 @@ mod tests {
 
     #[test]
     fn deb_bundle_declares_its_runtime_dependencies() {
-        // The bundler does not auto-populate `Depends:` -- leaving this unset omits
-        // the field entirely, producing a .deb that installs and then fails to launch.
+        // The bundler injects only the webkit/gtk pair below; everything else we need
+        // must be declared here or it is missing from `Depends:` entirely, producing a
+        // .deb that installs and then fails at launch.
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid tauri.conf.json");
         let depends = config["bundle"]["linux"]["deb"]["depends"]
@@ -329,9 +330,11 @@ mod tests {
         );
 
         // tauri-cli's Linux bundling unconditionally appends libwebkit2gtk-4.1-0 and
-        // libgtk-3-0 to this list with no dedup (verified against tauri-cli 2.11.4/2.11.5),
-        // so listing them here too would double them up in the built control file's
-        // Depends: line. Leave them out of our config; the CLI supplies them.
+        // libgtk-3-0 to this list with no dedup (re-verified against tauri-cli 2.11.4 on
+        // Ubuntu 26.04: a config of just ["git"] produced
+        // `Depends: git, libwebkit2gtk-4.1-0, libgtk-3-0`), so listing them here too would
+        // double them up in the built control file's Depends: line. Leave them out of our
+        // config; the CLI supplies them.
         for auto_injected in ["libwebkit2gtk-4.1-0", "libgtk-3-0"] {
             assert!(
                 !depends.iter().any(|entry| entry == auto_injected),

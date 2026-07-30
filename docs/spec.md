@@ -19,7 +19,7 @@ This document consolidates the 13 decisions charted on [Map: Note-taking app spe
 | Storage | Plain `.md` files, filename = title ([#3](https://github.com/IgorKvasn/note-taker/issues/3)) |
 | Sync | System `git` binary, shelled out from Rust ([#7](https://github.com/IgorKvasn/note-taker/issues/7)) |
 | Packaging | `.deb` via `tauri build` ([#13](https://github.com/IgorKvasn/note-taker/issues/13)) |
-| Platform floor | Ubuntu 22.04, covering 22.04 and 24.04 ([#13](https://github.com/IgorKvasn/note-taker/issues/13)) |
+| Platform | Ubuntu 26.04 only ([#35](https://github.com/IgorKvasn/note-taker/issues/35)) |
 
 The CM6 wrapper is deliberately hand-rolled: the formatting toolbar (§5) dispatches CM6 transactions directly, and a wrapper library would be an abstraction to reach through ([#6](https://github.com/IgorKvasn/note-taker/issues/6)).
 
@@ -323,27 +323,27 @@ All mutations run the title validation from §3 and trigger the sync chain.
 
 `tauri build` with `"targets": ["deb"]` — the built-in bundler, no `cargo-deb` ([#13](https://github.com/IgorKvasn/note-taker/issues/13)). A build shell script producing the `.deb` should exist ([#10](https://github.com/IgorKvasn/note-taker/issues/10)).
 
-> ### The bundler does not auto-populate `Depends`
+> ### The bundler auto-injects the webkit/gtk pair, and nothing else
 >
-> Despite how the docs read, `bundle.linux.deb.depends` must be written by hand. Verified in `tauri-bundler/src/bundle/linux/debian.rs:204-207`: the value is `settings.deb().depends … .unwrap_or_default()` guarded by `if !dependencies.is_empty()`, so leaving it unset **omits the `Depends:` line entirely**. The result is a `.deb` that installs cleanly and then fails at launch.
+> `bundle.linux.deb.depends` must be written by hand for anything outside that pair: the value is `settings.deb().depends … .unwrap_or_default()` guarded by `if !dependencies.is_empty()`, so a dependency we omit is simply absent from the shipped `Depends:` line, producing a `.deb` that installs cleanly and then fails at launch. What the bundler *does* add unconditionally is `libwebkit2gtk-4.1-0` and `libgtk-3-0`, with no dedup against our list — so declaring either of those ourselves doubles it. Verified against tauri-cli 2.11.4 on Ubuntu 26.04: a config of `["git"]` produced `Depends: git, libwebkit2gtk-4.1-0, libgtk-3-0`.
 
 ```json
 "bundle": {
   "linux": {
     "deb": {
-      "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "git"]
+      "depends": ["git"]
     }
   }
 }
 ```
 
-- **`libwebkit2gtk-4.1-0`** — Tauri v2 requires WebKitGTK **4.1**, not v1's 4.0.
-- **`libgtk-3-0`**.
 - **`git`** — the backend shells out to the system binary (§7), and `git` is `Priority: optional` in the archive, so it is *not* guaranteed present on a minimal Ubuntu install. Declaring it is what makes "shell out to system git" safe as an architecture.
+- **`libwebkit2gtk-4.1-0`** (auto-injected) — Tauri v2 requires WebKitGTK **4.1**, not v1's 4.0. Present on 26.04 as `2.52.x`.
+- **`libgtk-3-0`** (auto-injected) — **a virtual package on 26.04.** The 64-bit `time_t` transition renamed the real package to `libgtk-3-0t64`, which declares `Provides: libgtk-3-0`; that compatibility Provides is the only reason the bundler's hardcoded name still resolves. Nothing in our config can influence this name, so if the Provides is ever dropped the fix is a bundler upgrade, not a config change.
 - **No appindicator dependency** — this app has no tray icon.
 - `libsoup3` needs no explicit entry; it arrives transitively via webkit2gtk-4.1.
 
-**Ubuntu floor: 22.04.** `libwebkit2gtk-4.1-0` is absent on 20.04 and present on 22.04 and 24.04; 4.0 exists on 22.04 but is gone from 24.04, making 22.04 the only crossover. **Build on 22.04** and one `.deb` covers 22.04 and 24.04. Tauri publishes no official minimum Ubuntu version — 22.04 is derived from package availability.
+**Supported release: Ubuntu 26.04 only.** Earlier releases are supported neither as build hosts nor as install targets: a 26.04 build links against 26.04's glibc and will not install on 22.04 or 24.04. This inverts the earlier build-on-the-oldest-release policy, which existed to keep one `.deb` installable across 22.04 and 24.04, and is a deliberate support-policy change ([#35](https://github.com/IgorKvasn/note-taker/issues/35)). `scripts/build-deb.sh` hard-errors on a non-26.04 host; `ALLOW_ANY_UBUNTU=1` overrides it for local testing at the cost of a non-releasable artifact. Tauri publishes no official minimum Ubuntu version.
 
 ### Versioning
 
@@ -380,7 +380,7 @@ Consolidated from the sections above — each is a deliberate decision with rati
 | Marker-only selections re-wrap instead of toggling off in the toolbar | §5 |
 | Editor highlights sub/superscript/emoji that view mode won't render; view mode renders footnotes the editor won't highlight | §5 |
 | No auto-update — manual `dpkg -i` per release | §10 |
-| Ubuntu 20.04 unsupported | §10 |
+| Only Ubuntu 26.04 supported — the `.deb` will not install on 22.04 or 24.04 | §10 |
 
 ---
 
@@ -391,8 +391,7 @@ Flagged during packaging research and not settled from primary sources ([#13](ht
 - Deb-updater end-to-end behavior, especially `dpkg -i` over a running app.
 - Whether the Tauri CLI validates `version` as strict semver.
 - `libsoup3` coupling is inferred from WebKitGTK packaging, not stated on a Tauri page.
-- 20.04's lack of `libwebkit2gtk-4.1-0` rests on de-indexed search results rather than a live archive page.
-- No official minimum Ubuntu version from Tauri; 22.04 is derived.
+- No official minimum Ubuntu version from Tauri; targeting 26.04 is our support policy, not a documented floor.
 - GitHub Pages as apt hosting is reasoned from apt's static-HTTP requirements, not documented as supported.
 
 ---
