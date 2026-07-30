@@ -393,6 +393,69 @@ describe("NotesPanel", () => {
       expect(screen.queryByRole("textbox", { name: "New note title" })).toBeNull();
       expect(invoke).not.toHaveBeenCalledWith("create_note", expect.anything());
     });
+
+    it("shows New note / New folder on right-clicking panel space outside any root section", async () => {
+      mockTrees({ [ROOT_A.id]: [] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const panel = await screen.findByTestId("notes-panel");
+      await userEvent.pointer({ keys: "[MouseRight]", target: panel });
+
+      expect(await screen.findByRole("menuitem", { name: "New note" })).toBeDefined();
+      expect(screen.getByRole("menuitem", { name: "New folder" })).toBeDefined();
+    });
+
+    it("creates at the top level of the (only) root when right-clicking outside any root section", async () => {
+      mockTrees({ [ROOT_A.id]: [] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const panel = await screen.findByTestId("notes-panel");
+      await userEvent.pointer({ keys: "[MouseRight]", target: panel });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "New note" }));
+
+      const field = await screen.findByRole("textbox", { name: "New note title" });
+      await userEvent.type(field, "new-note{Enter}");
+
+      expect(invoke).toHaveBeenCalledWith("create_note", { rootId: ROOT_A.id, path: "new-note.md" });
+    });
+
+    it("creates at the top level of the first root when right-clicking outside any root section with multiple roots", async () => {
+      mockTrees({ [ROOT_A.id]: [], [ROOT_B.id]: [] });
+      render(<NotesPanel roots={[ROOT_A, ROOT_B]} onOpenNote={noop} />);
+
+      const panel = await screen.findByTestId("notes-panel");
+      await userEvent.pointer({ keys: "[MouseRight]", target: panel });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "New note" }));
+
+      const field = await screen.findByRole("textbox", { name: "New note title" });
+      await userEvent.type(field, "new-note{Enter}");
+
+      expect(invoke).toHaveBeenCalledWith("create_note", { rootId: ROOT_A.id, path: "new-note.md" });
+    });
+
+    it("does not show the context menu on right-clicking outside any root section when there are no roots", async () => {
+      render(<NotesPanel roots={[]} onOpenNote={noop} />);
+
+      const panel = await screen.findByTestId("notes-panel");
+      await userEvent.pointer({ keys: "[MouseRight]", target: panel });
+
+      expect(screen.queryByRole("menuitem", { name: "New note" })).toBeNull();
+    });
+
+    it("shows New note / New folder on right-clicking a collapsed root section's empty space", async () => {
+      mockTrees({ [ROOT_A.id]: [] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const header = await screen.findByRole("button", { name: /^notes/ });
+      await userEvent.click(header);
+      expect(header.getAttribute("aria-expanded")).toBe("false");
+
+      const section = header.closest("section")!;
+      await userEvent.pointer({ keys: "[MouseRight]", target: section });
+
+      expect(await screen.findByRole("menuitem", { name: "New note" })).toBeDefined();
+      expect(screen.getByRole("menuitem", { name: "New folder" })).toBeDefined();
+    });
   });
 
   describe("delete via context menu", () => {

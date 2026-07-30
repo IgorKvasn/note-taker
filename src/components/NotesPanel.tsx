@@ -696,8 +696,22 @@ export function NotesPanel({
     [refresh, onNotePathChanged],
   );
 
+  const handlePanelContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      // Only true empty space -- a RootSection's own onContextMenu already
+      // handles its own empty space and, via handleContextMenu, stops
+      // propagation before it reaches here -- targets the first root's top
+      // level, per issue #30's resolution of "which root should out-of-section
+      // space target" when multiple roots exist.
+      if (event.target !== event.currentTarget) return;
+      if (roots.length === 0) return;
+      handleContextMenu(event, roots[0].id, "", null);
+    },
+    [roots, handleContextMenu],
+  );
+
   return (
-    <div className="notes-panel" data-testid="notes-panel">
+    <div className="notes-panel" data-testid="notes-panel" onContextMenu={handlePanelContextMenu}>
       <div className="notes-panel__toolbar">
         <input
           type="text"
