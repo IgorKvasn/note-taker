@@ -9,7 +9,7 @@ mod tree;
 use std::path::Path;
 use std::sync::Arc;
 
-use tauri::menu::MenuBuilder;
+use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
@@ -262,13 +262,18 @@ pub fn run() {
         .setup(|app| {
             app.manage(Arc::new(SyncManager::new()));
 
-            // Flat menu bar: Settings, About and Quit are top-level actions with
-            // no submenus, so `.text(..)` items go straight onto the menu root.
-            let menu = MenuBuilder::new(app)
+            // The actions live in a submenu rather than directly on the menu root:
+            // a root-level item doubles as the menubar button that opens it, so on
+            // GTK the first click only focuses the menubar and the action needs a
+            // second click to fire.
+            let app_menu = SubmenuBuilder::new(app, "Menu")
                 .text(MENU_SETTINGS, "Settings")
                 .text(MENU_ABOUT, "About")
+                .separator()
                 .text(MENU_QUIT, "Quit")
                 .build()?;
+
+            let menu = MenuBuilder::new(app).item(&app_menu).build()?;
 
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| handle_menu_event(app, event.id().0.as_str()));
