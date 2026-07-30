@@ -8,6 +8,7 @@ import {
   type TreeNode,
 } from "../ipc";
 import { InlineCreateField, type CreateKind } from "./InlineCreateField";
+import { RootSyncIndicator } from "./RootSyncIndicator";
 import { TreeContextMenu, type ContextMenuState } from "./TreeContextMenu";
 import "./NotesPanel.css";
 
@@ -259,6 +260,7 @@ function RootSection({
       >
         <span className="notes-panel__disclosure" data-expanded={isExpanded || undefined} aria-hidden="true" />
         {rootLabel(root)}
+        <RootSyncIndicator rootId={root.id} onSyncSettled={loadTree} />
       </button>
 
       {isExpanded && (

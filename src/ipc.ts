@@ -17,6 +17,11 @@ export const COMMAND_CREATE_NOTE = "create_note";
 export const COMMAND_CREATE_FOLDER = "create_folder";
 export const COMMAND_GET_STATE = "get_state";
 export const COMMAND_SAVE_STATE = "save_state";
+export const COMMAND_SYNC_ROOT = "sync_root";
+export const COMMAND_GET_ROOT_STATUS = "get_root_status";
+
+/** Emitted by the backend git sync chain (spec §7); one-way, never invoked. */
+export const EVENT_SYNC_STATUS = "sync-status";
 
 /** Mirrors `RootConfig` in `src-tauri/src/config.rs`. */
 export interface RootConfig {
@@ -85,4 +90,28 @@ export interface UiState {
   split_ratio: number;
   last_open_note: LastOpenNote | null;
   expanded_paths: Record<string, string[]>;
+  has_dismissed_local_only_notice: boolean;
+}
+
+/**
+ * Mirrors `SyncState` in `src-tauri/src/sync.rs`, serialized as an
+ * externally-tagged enum via `#[serde(tag = "state", rename_all = "lowercase")]`.
+ */
+export type SyncState =
+  | { state: "syncing" }
+  | { state: "synced" }
+  | { state: "local_only" }
+  | { state: "conflict" }
+  | { state: "error"; stderr: string };
+
+/** Mirrors `SyncStatusEvent` in `src-tauri/src/sync.rs`, the payload of `sync-status`. */
+export interface SyncStatusEvent {
+  root_id: string;
+  state: SyncState;
+}
+
+/** Mirrors `RootStatus` in `src-tauri/src/sync.rs`, returned by `get_root_status`. */
+export interface RootStatus {
+  conflicted_count: number;
+  sync_state: SyncState;
 }

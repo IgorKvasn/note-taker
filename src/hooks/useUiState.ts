@@ -7,6 +7,7 @@ const DEFAULT_UI_STATE: UiState = {
   split_ratio: DEFAULT_PANE_RATIO,
   last_open_note: null,
   expanded_paths: {},
+  has_dismissed_local_only_notice: false,
 };
 
 /** Debounce window between an expanded-paths/ratio change and the autosave `save_state` call. */
@@ -77,5 +78,13 @@ export function useUiState() {
     [scheduleSave],
   );
 
-  return { state, isLoaded, setSplitRatio, setLastOpenNote, setExpandedPaths };
+  const dismissLocalOnlyNotice = useCallback(() => {
+    setState((current) => {
+      const next = { ...current, has_dismissed_local_only_notice: true };
+      scheduleSave(next);
+      return next;
+    });
+  }, [scheduleSave]);
+
+  return { state, isLoaded, setSplitRatio, setLastOpenNote, setExpandedPaths, dismissLocalOnlyNotice };
 }

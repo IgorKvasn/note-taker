@@ -1,0 +1,41 @@
+.root-sync-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding-right: 4px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.root-sync-indicator__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+}
+
+.root-sync-indicator[data-sync-state="synced"] .root-sync-indicator__dot {
+  background-color: var(--success-color, #2ea043);
+}
+
+.root-sync-indicator[data-sync-state="syncing"] .root-sync-indicator__dot {
+  background-color: var(--accent-color, #4a90d9);
+}
+
+.root-sync-indicator[data-sync-state="conflict"] .root-sync-indicator__dot,
+.root-sync-indicator[data-sync-state="error"] .root-sync-indicator__dot {
+  background-color: var(--danger-color, #d94a4a);
+}
+
+.root-sync-indicator__retry {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--surface-raised);
+  color: inherit;
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0 4px;
+  cursor: pointer;
+}

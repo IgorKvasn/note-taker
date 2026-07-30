@@ -11,6 +11,7 @@ const SAVED_STATE: UiState = {
   split_ratio: 0.42,
   last_open_note: { root_id: "01ROOT", path: "note.md" },
   expanded_paths: { "01ROOT": ["folder"] },
+  has_dismissed_local_only_notice: false,
 };
 
 describe("useUiState", () => {
@@ -45,6 +46,7 @@ describe("useUiState", () => {
       split_ratio: DEFAULT_PANE_RATIO,
       last_open_note: null,
       expanded_paths: {},
+      has_dismissed_local_only_notice: false,
     });
   });
 
@@ -107,5 +109,24 @@ describe("useUiState", () => {
 
     act(() => result.current.setExpandedPaths("01ROOT", ["folder", "folder/sub"]));
     expect(result.current.state.expanded_paths).toEqual({ "01ROOT": ["folder", "folder/sub"] });
+  });
+
+  it("dismissLocalOnlyNotice flips the flag and persists it", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_state") return Promise.resolve(SAVED_STATE);
+      return Promise.resolve(undefined);
+    });
+
+    const { result } = renderHook(() => useUiState());
+    await waitFor(() => expect(result.current.isLoaded).toBe(true));
+
+    act(() => result.current.dismissLocalOnlyNotice());
+
+    expect(result.current.state.has_dismissed_local_only_notice).toBe(true);
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_state", {
+        state: { ...SAVED_STATE, has_dismissed_local_only_notice: true },
+      }),
+    );
   });
 });

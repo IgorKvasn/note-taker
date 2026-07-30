@@ -5,7 +5,9 @@ import { NotesPanel } from "./NotesPanel";
 import type { RootConfig, TreeNode } from "../ipc";
 
 const invoke = vi.hoisted(() => vi.fn());
+const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
 const ROOT_A: RootConfig = { id: "01ROOT-A", path: "/home/user/notes", auto_sync: false, remote_url: "" };
 const ROOT_B: RootConfig = { id: "01ROOT-B", path: "/home/user/work-notes", auto_sync: false, remote_url: "" };
@@ -20,6 +22,9 @@ function note(name: string, path: string): TreeNode {
 
 function mockTrees(trees: Record<string, TreeNode[] | Error>) {
   invoke.mockImplementation((command: string, args?: { rootId: string }) => {
+    if (command === "get_root_status") {
+      return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+    }
     if (command !== "list_tree") return Promise.resolve(undefined);
     const result = trees[args!.rootId];
     if (result instanceof Error) return Promise.reject(result);
@@ -32,6 +37,7 @@ const noop = () => {};
 describe("NotesPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    listen.mockResolvedValue(() => {});
   });
 
   it("renders one section per root, in config order, labeled by folder name", async () => {
@@ -39,11 +45,15 @@ describe("NotesPanel", () => {
     render(<NotesPanel roots={[ROOT_A, ROOT_B]} onOpenNote={noop} />);
 
     const headers = await screen.findAllByRole("button", { expanded: true });
+    // Each header's text also carries its RootSyncIndicator label (e.g. "Local
+    // only"), so this checks the folder-name prefix rather than an exact match.
     const labels = headers.map((header) => header.textContent);
+    const notesIndex = labels.findIndex((label) => label?.startsWith("notes"));
+    const workNotesIndex = labels.findIndex((label) => label?.startsWith("work-notes"));
 
-    expect(labels).toContain("notes");
-    expect(labels).toContain("work-notes");
-    expect(labels.indexOf("notes")).toBeLessThan(labels.indexOf("work-notes"));
+    expect(notesIndex).toBeGreaterThanOrEqual(0);
+    expect(workNotesIndex).toBeGreaterThanOrEqual(0);
+    expect(notesIndex).toBeLessThan(workNotesIndex);
   });
 
   it("never displays the root id anywhere", async () => {

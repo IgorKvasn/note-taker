@@ -68,6 +68,12 @@ pub fn config_path() -> Option<PathBuf> {
 /// addressing a note or directory takes `(root_id, relative_path)` rather than
 /// an absolute path (spec §9.2).
 pub fn find_root_path(root_id: &str) -> Result<PathBuf, String> {
+    find_root_config(root_id).map(|root| PathBuf::from(root.path))
+}
+
+/// Resolves a root's full configured entry (path, `auto_sync`, `remote_url`)
+/// from its stable ID -- what the sync chain needs, beyond just the path.
+pub fn find_root_config(root_id: &str) -> Result<RootConfig, String> {
     let config = match get_config() {
         ConfigOutcome::Ok { config } => config,
         ConfigOutcome::Missing => return Err("no configuration file exists".to_string()),
@@ -78,7 +84,6 @@ pub fn find_root_path(root_id: &str) -> Result<PathBuf, String> {
         .roots
         .into_iter()
         .find(|root| root.id == root_id)
-        .map(|root| PathBuf::from(root.path))
         .ok_or_else(|| format!("no root with id {root_id}"))
 }
 

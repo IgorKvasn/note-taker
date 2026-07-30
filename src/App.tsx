@@ -13,8 +13,10 @@ import {
   COMMAND_SHOW_CONFIG_ERROR,
   EVENT_MENU_ABOUT,
   EVENT_MENU_SETTINGS,
+  EVENT_SYNC_STATUS,
   type Config,
   type ConfigOutcome,
+  type SyncStatusEvent,
 } from "./ipc";
 import "./App.css";
 
@@ -24,9 +26,16 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [configOutcome, setConfigOutcome] = useState<ConfigOutcome | null>(null);
   const [openNote, setOpenNote] = useState<{ rootId: string; path: string } | null>(null);
-  const { state: uiState, isLoaded: isUiStateLoaded, setSplitRatio, setLastOpenNote, setExpandedPaths } =
-    useUiState();
+  const {
+    state: uiState,
+    isLoaded: isUiStateLoaded,
+    setSplitRatio,
+    setLastOpenNote,
+    setExpandedPaths,
+    dismissLocalOnlyNotice,
+  } = useUiState();
   const hasRestoredOpenNote = useRef(false);
+  const [showLocalOnlyNotice, setShowLocalOnlyNotice] = useState(false);
 
   const openNoteHandler = useCallback(
     (rootId: string, path: string) => {
@@ -91,6 +100,30 @@ export function App() {
       pendingUnlistenSettings.then((unlisten) => unlisten()).catch(() => {});
     };
   }, []);
+
+  // The one-time local-only-sync notice (spec §7): surfaced the first time any
+  // root's sync chain reports `local_only` after the first save, and only if
+  // it hasn't already been dismissed in a previous session.
+  useEffect(() => {
+    if (!isUiStateLoaded || uiState.has_dismissed_local_only_notice) {
+      return;
+    }
+
+    const pendingUnlisten = listen<SyncStatusEvent>(EVENT_SYNC_STATUS, (event) => {
+      if (event.payload.state.state === "local_only") {
+        setShowLocalOnlyNotice(true);
+      }
+    });
+
+    return () => {
+      pendingUnlisten.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [isUiStateLoaded, uiState.has_dismissed_local_only_notice]);
+
+  const dismissNotice = useCallback(() => {
+    setShowLocalOnlyNotice(false);
+    dismissLocalOnlyNotice();
+  }, [dismissLocalOnlyNotice]);
 
   const handleOpenNoteError = useCallback(() => setOpenNote(null), []);
 
@@ -170,6 +203,17 @@ export function App() {
               onCancel={closeSettings}
             />
           </div>
+        </div>
+      )}
+      {showLocalOnlyNotice && (
+        <div className="local-only-notice" role="status">
+          <p>
+            Notes here are saved and committed locally. Sync to a remote is off (or none is configured), so nothing
+            leaves this machine automatically.
+          </p>
+          <button type="button" onClick={dismissNotice}>
+            Got it
+          </button>
         </div>
       )}
     </div>

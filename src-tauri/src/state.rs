@@ -23,6 +23,11 @@ pub struct UiState {
     /// survive a root being moved on disk (config.toml only ever changes `path`).
     #[serde(default)]
     pub expanded_paths: std::collections::HashMap<String, Vec<String>>,
+    /// Whether the one-time "sync is local-only" notice (spec §7) has been
+    /// dismissed. Global rather than per-root: the notice explains the app's
+    /// local-only mode in general, not any one root's remote configuration.
+    #[serde(default)]
+    pub has_dismissed_local_only_notice: bool,
 }
 
 fn default_split_ratio() -> f64 {
@@ -35,6 +40,7 @@ impl Default for UiState {
             split_ratio: DEFAULT_SPLIT_RATIO,
             last_open_note: None,
             expanded_paths: std::collections::HashMap::new(),
+            has_dismissed_local_only_notice: false,
         }
     }
 }
@@ -132,6 +138,7 @@ mod tests {
                     "01AAA".to_string(),
                     vec!["folder".to_string(), "folder/sub".to_string()],
                 )]),
+                has_dismissed_local_only_notice: true,
             };
 
             save_state(&state).unwrap();

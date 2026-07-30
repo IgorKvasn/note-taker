@@ -1,15 +1,20 @@
 mod config;
 mod notes;
 mod state;
+mod sync;
 mod tree;
 
+use std::path::Path;
+use std::sync::Arc;
+
 use tauri::menu::MenuBuilder;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 use config::{Config, ConfigOutcome, RootDraft, RootValidation};
 use notes::OpenNoteResult;
 use state::UiState;
+use sync::{RootStatus, SyncManager};
 use tree::TreeNode;
 
 pub const MENU_SETTINGS: &str = "settings";
@@ -70,21 +75,53 @@ fn open_note(root_id: String, path: String) -> Result<OpenNoteResult, String> {
 }
 
 #[tauri::command]
-fn save_note(root_id: String, path: String, content: String) -> Result<(), String> {
+fn save_note(app: AppHandle, root_id: String, path: String, content: String) -> Result<(), String> {
     let note_path = config::resolve_path_in_root(&root_id, &path)?;
-    notes::save_note(&note_path, &content)
+    notes::save_note(&note_path, &content)?;
+    trigger_sync_for_root(&app, &root_id);
+    Ok(())
 }
 
 #[tauri::command]
-fn create_note(root_id: String, path: String) -> Result<(), String> {
+fn create_note(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
     let note_path = config::resolve_path_in_root(&root_id, &path)?;
-    notes::create_note(&note_path)
+    notes::create_note(&note_path)?;
+    trigger_sync_for_root(&app, &root_id);
+    Ok(())
 }
 
 #[tauri::command]
-fn create_folder(root_id: String, path: String) -> Result<(), String> {
+fn create_folder(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
     let folder_path = config::resolve_path_in_root(&root_id, &path)?;
-    notes::create_folder(&folder_path)
+    notes::create_folder(&folder_path)?;
+    trigger_sync_for_root(&app, &root_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_root(app: AppHandle, root_id: String) -> Result<(), String> {
+    trigger_sync_for_root(&app, &root_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_root_status(app: AppHandle, root_id: String) -> Result<RootStatus, String> {
+    let root = config::find_root_config(&root_id)?;
+    let manager = app.state::<Arc<SyncManager>>();
+    let last_known_state = manager.last_known_state(&root_id);
+    Ok(sync::root_status(Path::new(&root.path), last_known_state))
+}
+
+/// The one call every save/create command makes to kick the sync chain off as
+/// a background task (spec §7). A root that fails to resolve (e.g. a stale ID
+/// from a since-removed root) just skips sync silently -- the mutation itself
+/// already succeeded, and there is nothing sensible to sync.
+fn trigger_sync_for_root(app: &AppHandle, root_id: &str) {
+    let Ok(root) = config::find_root_config(root_id) else {
+        return;
+    };
+    let manager = app.state::<Arc<SyncManager>>().inner().clone();
+    sync::trigger_sync(app.clone(), manager, root);
 }
 
 #[tauri::command]
@@ -142,10 +179,14 @@ pub fn run() {
             save_note,
             create_note,
             create_folder,
+            sync_root,
+            get_root_status,
             get_state,
             save_state,
         ])
         .setup(|app| {
+            app.manage(Arc::new(SyncManager::new()));
+
             // Flat menu bar: Settings, About and Quit are top-level actions with
             // no submenus, so `.text(..)` items go straight onto the menu root.
             let menu = MenuBuilder::new(app)

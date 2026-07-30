@@ -30,9 +30,17 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
     }
     if (command === "save_note") return Promise.resolve(undefined);
     if (command === "get_state") {
-      return Promise.resolve({ split_ratio: 0.28, last_open_note: null, expanded_paths: {} });
+      return Promise.resolve({
+        split_ratio: 0.28,
+        last_open_note: null,
+        expanded_paths: {},
+        has_dismissed_local_only_notice: true,
+      });
     }
     if (command === "save_state") return Promise.resolve(undefined);
+    if (command === "get_root_status") {
+      return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+    }
     return Promise.resolve(undefined);
   });
 }
@@ -276,5 +284,61 @@ describe("App", () => {
 
     expect(await screen.findByRole("dialog", { name: "Settings" })).toBeDefined();
     expect(screen.getByText(EMPTY_CONFIG.roots[0].path)).toBeDefined();
+  });
+
+  it("shows the local-only notice on the first local_only sync-status event and dismisses it, persisting the dismissal", async () => {
+    mockInvoke({
+      get_state: { split_ratio: 0.28, last_open_note: null, expanded_paths: {}, has_dismissed_local_only_notice: false },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await waitFor(() => expect(listen).toHaveBeenCalledWith("sync-status", expect.any(Function)));
+    const registrations = listen.mock.calls.filter(([name]) => name === "sync-status");
+
+    expect(screen.queryByRole("status")).toBeNull();
+
+    // RootSyncIndicator also subscribes to sync-status; fire the event through
+    // every registered handler so this doesn't depend on registration order.
+    await waitFor(() => {
+      for (const [, handler] of registrations) {
+        (handler as (event: { payload: unknown }) => void)({
+          payload: { root_id: "01ROOT", state: { state: "local_only" } },
+        });
+      }
+    });
+
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toMatch(/local/i);
+
+    await userEvent.click(screen.getByRole("button", { name: "Got it" }));
+
+    expect(screen.queryByRole("status")).toBeNull();
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "save_state",
+        expect.objectContaining({ state: expect.objectContaining({ has_dismissed_local_only_notice: true }) }),
+      ),
+    );
+  });
+
+  it("never shows the local-only notice once it was already dismissed in a previous session", async () => {
+    mockInvoke({
+      get_state: { split_ratio: 0.28, last_open_note: null, expanded_paths: {}, has_dismissed_local_only_notice: true },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    const syncStatusRegistrations = listen.mock.calls.filter(([name]) => name === "sync-status");
+    // RootSyncIndicator (one per root) also subscribes to sync-status; simulate
+    // every registered handler receiving a local_only event and assert none of
+    // them renders App's one-time notice.
+    for (const [, handler] of syncStatusRegistrations) {
+      (handler as (event: { payload: unknown }) => void)({
+        payload: { root_id: "01ROOT", state: { state: "local_only" } },
+      });
+    }
+
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

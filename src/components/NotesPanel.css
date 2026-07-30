@@ -40,6 +40,10 @@
   cursor: pointer;
 }
 
+.notes-panel__section-header .root-sync-indicator {
+  font-weight: 400;
+}
+
 .notes-panel__section-header:hover {
   background-color: var(--surface-hover);
 }
