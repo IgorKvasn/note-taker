@@ -90,6 +90,11 @@
   font-weight: 600;
 }
 
+.notes-panel__item[data-drag-over] {
+  outline: 2px solid var(--accent-color, currentColor);
+  outline-offset: -2px;
+}
+
 .notes-panel__disclosure {
   display: inline-block;
   width: 0;

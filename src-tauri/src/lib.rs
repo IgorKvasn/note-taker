@@ -102,6 +102,16 @@ fn create_folder(app: AppHandle, root_id: String, path: String) -> Result<(), St
 }
 
 #[tauri::command]
+fn move_item(app: AppHandle, root_id: String, from_path: String, to_path: String) -> Result<(), String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let from = config::resolve_path_in_root(&root_id, &from_path)?;
+    let to = config::resolve_path_in_root(&root_id, &to_path)?;
+    notes::move_item(&root_path, &from, &to)?;
+    trigger_sync_for_root(&app, &root_id);
+    Ok(())
+}
+
+#[tauri::command]
 fn sync_root(app: AppHandle, root_id: String) -> Result<(), String> {
     trigger_sync_for_root(&app, &root_id);
     Ok(())
@@ -193,6 +203,7 @@ pub fn run() {
             save_note,
             create_note,
             create_folder,
+            move_item,
             sync_root,
             get_root_status,
             search_notes,

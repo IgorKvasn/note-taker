@@ -6,6 +6,9 @@ export interface ContextMenuState {
   y: number;
   rootId: string;
   dirPath: string;
+  /** Set only when right-clicking an existing note/folder, not empty space --
+   * "Rename" only makes sense with a target selected. */
+  renameTarget?: { path: string; isDirectory: boolean };
 }
 
 interface TreeContextMenuProps {
@@ -13,9 +16,10 @@ interface TreeContextMenuProps {
   onClose: () => void;
   onCreateNote: () => void;
   onCreateFolder: () => void;
+  onRename: () => void;
 }
 
-export function TreeContextMenu({ state, onClose, onCreateNote, onCreateFolder }: TreeContextMenuProps) {
+export function TreeContextMenu({ state, onClose, onCreateNote, onCreateFolder, onRename }: TreeContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,6 +53,11 @@ export function TreeContextMenu({ state, onClose, onCreateNote, onCreateFolder }
       <button type="button" role="menuitem" onClick={onCreateFolder}>
         New folder
       </button>
+      {state.renameTarget !== undefined && (
+        <button type="button" role="menuitem" onClick={onRename}>
+          Rename
+        </button>
+      )}
     </div>
   );
 }

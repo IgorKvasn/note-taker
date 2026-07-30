@@ -4,21 +4,31 @@ import "./InlineCreateField.css";
 
 export type CreateKind = "note" | "folder";
 
+function renameOrCreateLabel(kind: CreateKind, isRename: boolean): string {
+  if (isRename) return kind === "note" ? "Rename note" : "Rename folder";
+  return kind === "note" ? "New note title" : "New folder title";
+}
+
 interface InlineCreateFieldProps {
   kind: CreateKind;
   onConfirm: (title: string) => Promise<void>;
   onCancel: () => void;
   depth: number;
+  /** Pre-fills the field with the current title and relabels it for renaming,
+   * rather than starting empty as a fresh create does. */
+  initialValue?: string;
 }
 
-export function InlineCreateField({ kind, onConfirm, onCancel, depth }: InlineCreateFieldProps) {
-  const [value, setValue] = useState("");
+export function InlineCreateField({ kind, onConfirm, onCancel, depth, initialValue }: InlineCreateFieldProps) {
+  const isRename = initialValue !== undefined;
+  const [value, setValue] = useState(initialValue ?? "");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
+    inputRef.current?.select();
   }, []);
 
   const handleKeyDown = async (event: KeyboardEvent<HTMLInputElement>) => {
@@ -53,7 +63,7 @@ export function InlineCreateField({ kind, onConfirm, onCancel, depth }: InlineCr
           ref={inputRef}
           type="text"
           className="notes-panel__inline-input"
-          aria-label={kind === "note" ? "New note title" : "New folder title"}
+          aria-label={renameOrCreateLabel(kind, isRename)}
           value={value}
           disabled={isSubmitting}
           onChange={(event) => setValue(event.target.value)}

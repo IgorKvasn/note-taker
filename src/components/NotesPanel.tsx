@@ -4,6 +4,7 @@ import {
   COMMAND_CREATE_FOLDER,
   COMMAND_CREATE_NOTE,
   COMMAND_LIST_TREE,
+  COMMAND_MOVE_ITEM,
   type RootConfig,
   type SearchResult,
   type TreeNode,
@@ -25,14 +26,22 @@ interface NotesPanelProps {
   /** Persisted expanded folder paths, keyed by root ID. */
   expandedPathsByRoot?: Record<string, string[]>;
   onExpandedPathsChange?: (rootId: string, expandedPaths: string[]) => void;
+  /**
+   * Called after a successful rename/move whose `fromPath` is the currently
+   * open note or one of its ancestor folders, with the note's new path -- so
+   * the caller can keep it open and correctly addressed for the next save.
+   */
+  onNotePathChanged?: (rootId: string, fromPath: string, toPath: string) => void;
 }
 
 const NO_EXPANDED_PATHS: Record<string, string[]> = {};
 const noopExpandedPathsChange = () => {};
+const noopNotePathChanged = () => {};
 
 interface Selection {
   rootId: string;
   path: string;
+  isDirectory: boolean;
 }
 
 function rootLabel(root: RootConfig): string {
@@ -41,7 +50,7 @@ function rootLabel(root: RootConfig): string {
   return lastSegment && lastSegment.length > 0 ? lastSegment : root.path;
 }
 
-function isSameSelection(a: Selection | null, b: Selection): boolean {
+function isSameSelection(a: Selection | null, b: Pick<Selection, "rootId" | "path">): boolean {
   return a !== null && a.rootId === b.rootId && a.path === b.path;
 }
 
@@ -56,6 +65,17 @@ interface PendingCreate {
   kind: CreateKind;
 }
 
+/** The single node currently being renamed in place, scoped to one root. */
+interface PendingRename {
+  rootId: string;
+  path: string;
+  isDirectory: boolean;
+}
+
+function isDescendantPath(candidate: string, ancestor: string): boolean {
+  return candidate === ancestor || candidate.startsWith(`${ancestor}/`);
+}
+
 interface TreeNodeViewProps {
   node: TreeNode;
   rootId: string;
@@ -63,10 +83,14 @@ interface TreeNodeViewProps {
   selection: Selection | null;
   onToggleFolder: (path: string) => void;
   onOpenNote: (path: string) => void;
-  onContextMenu: (event: React.MouseEvent, dirPath: string) => void;
+  onContextMenu: (event: React.MouseEvent, dirPath: string, renameTarget: { path: string; isDirectory: boolean }) => void;
   pendingCreate: PendingCreate | null;
   onConfirmCreate: (title: string) => Promise<void>;
   onCancelCreate: () => void;
+  pendingRename: PendingRename | null;
+  onConfirmRename: (title: string) => Promise<void>;
+  onCancelRename: () => void;
+  onDropItem: (fromPath: string, fromIsDirectory: boolean, toDirPath: string) => void;
   depth: number;
 }
 
@@ -81,9 +105,60 @@ function TreeNodeView({
   pendingCreate,
   onConfirmCreate,
   onCancelCreate,
+  pendingRename,
+  onConfirmRename,
+  onCancelRename,
+  onDropItem,
   depth,
 }: TreeNodeViewProps) {
+  const [isDragOver, setIsDragOver] = useState(false);
+  const isRenamingThis = pendingRename !== null && pendingRename.rootId === rootId && pendingRename.path === node.path;
+
+  const handleDragStart = (event: React.DragEvent) => {
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(
+      "application/x-note-taker-item",
+      JSON.stringify({ rootId, path: node.path, isDirectory: node.is_directory }),
+    );
+  };
+
+  const handleDragOver = (event: React.DragEvent) => {
+    if (!node.is_directory) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => setIsDragOver(false);
+
+  const handleDrop = (event: React.DragEvent) => {
+    if (!node.is_directory) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragOver(false);
+
+    const raw = event.dataTransfer.getData("application/x-note-taker-item");
+    if (raw === "") return;
+    const dragged = JSON.parse(raw) as { rootId: string; path: string; isDirectory: boolean };
+    if (dragged.rootId !== rootId) return;
+    onDropItem(dragged.path, dragged.isDirectory, node.path);
+  };
+
   if (!node.is_directory) {
+    if (isRenamingThis) {
+      return (
+        <InlineCreateField
+          kind="note"
+          initialValue={node.name}
+          onConfirm={onConfirmRename}
+          onCancel={onCancelRename}
+          depth={depth}
+        />
+      );
+    }
+
     return (
       <li>
         <button
@@ -91,8 +166,12 @@ function TreeNodeView({
           className="notes-panel__item notes-panel__item--note"
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           data-selected={isSameSelection(selection, { rootId, path: node.path }) || undefined}
+          draggable
+          onDragStart={handleDragStart}
           onClick={() => onOpenNote(node.path)}
-          onContextMenu={(event) => onContextMenu(event, parentDirPath(node.path))}
+          onContextMenu={(event) =>
+            onContextMenu(event, parentDirPath(node.path), { path: node.path, isDirectory: false })
+          }
         >
           {node.name}
         </button>
@@ -103,6 +182,18 @@ function TreeNodeView({
   const isExpanded = expandedPaths.has(node.path);
   const pendingHere = pendingCreate !== null && pendingCreate.rootId === rootId && pendingCreate.dirPath === node.path;
 
+  if (isRenamingThis) {
+    return (
+      <InlineCreateField
+        kind="folder"
+        initialValue={node.name}
+        onConfirm={onConfirmRename}
+        onCancel={onCancelRename}
+        depth={depth}
+      />
+    );
+  }
+
   return (
     <li>
       <button
@@ -110,9 +201,15 @@ function TreeNodeView({
         className="notes-panel__item notes-panel__item--folder"
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         data-selected={isSameSelection(selection, { rootId, path: node.path }) || undefined}
+        data-drag-over={isDragOver || undefined}
         aria-expanded={isExpanded}
+        draggable
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         onClick={() => onToggleFolder(node.path)}
-        onContextMenu={(event) => onContextMenu(event, node.path)}
+        onContextMenu={(event) => onContextMenu(event, node.path, { path: node.path, isDirectory: true })}
       >
         <span className="notes-panel__disclosure" data-expanded={isExpanded || undefined} aria-hidden="true" />
         {node.name}
@@ -132,6 +229,10 @@ function TreeNodeView({
               pendingCreate={pendingCreate}
               onConfirmCreate={onConfirmCreate}
               onCancelCreate={onCancelCreate}
+              pendingRename={pendingRename}
+              onConfirmRename={onConfirmRename}
+              onCancelRename={onCancelRename}
+              onDropItem={onDropItem}
               depth={depth + 1}
             />
           ))}
@@ -162,10 +263,19 @@ interface RootSectionProps {
   refreshToken: number;
   initialExpandedPaths: string[];
   onExpandedPathsChange: (rootId: string, expandedPaths: string[]) => void;
-  onContextMenu: (event: React.MouseEvent, rootId: string, dirPath: string) => void;
+  onContextMenu: (
+    event: React.MouseEvent,
+    rootId: string,
+    dirPath: string,
+    renameTarget?: { path: string; isDirectory: boolean },
+  ) => void;
   pendingCreate: PendingCreate | null;
   onConfirmCreate: (rootId: string, title: string) => Promise<void>;
   onCancelCreate: () => void;
+  pendingRename: PendingRename | null;
+  onConfirmRename: (rootId: string, title: string) => Promise<void>;
+  onCancelRename: () => void;
+  onDropItem: (rootId: string, fromPath: string, fromIsDirectory: boolean, toDirPath: string) => void;
 }
 
 function RootSection({
@@ -180,6 +290,10 @@ function RootSection({
   pendingCreate,
   onConfirmCreate,
   onCancelCreate,
+  pendingRename,
+  onConfirmRename,
+  onCancelRename,
+  onDropItem,
 }: RootSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [tree, setTree] = useState<TreeNode[] | null>(null);
@@ -232,20 +346,31 @@ function RootSection({
         onExpandedPathsChange(root.id, Array.from(next));
         return next;
       });
-      onSelect({ rootId: root.id, path });
+      onSelect({ rootId: root.id, path, isDirectory: true });
     },
     [onExpandedPathsChange, onSelect, root.id],
   );
 
   const openNote = useCallback(
     (path: string) => {
-      onSelect({ rootId: root.id, path });
+      onSelect({ rootId: root.id, path, isDirectory: false });
       onOpenNote(root.id, path);
     },
     [onOpenNote, onSelect, root.id],
   );
 
   const pendingAtTopLevel = pendingCreate !== null && pendingCreate.rootId === root.id && pendingCreate.dirPath === "";
+  const pendingRenameHere = pendingRename !== null && pendingRename.rootId === root.id ? pendingRename : null;
+
+  const handleTopLevelDrop = (event: React.DragEvent) => {
+    if (event.target !== event.currentTarget) return;
+    event.preventDefault();
+    const raw = event.dataTransfer.getData("application/x-note-taker-item");
+    if (raw === "") return;
+    const dragged = JSON.parse(raw) as { rootId: string; path: string; isDirectory: boolean };
+    if (dragged.rootId !== root.id) return;
+    onDropItem(root.id, dragged.path, dragged.isDirectory, "");
+  };
 
   return (
     <section
@@ -278,6 +403,10 @@ function RootSection({
               onContextMenu(event, root.id, "");
             }
           }}
+          onDragOver={(event) => {
+            if (event.target === event.currentTarget) event.preventDefault();
+          }}
+          onDrop={handleTopLevelDrop}
         >
           {error !== null && (
             <p className="notes-panel__error" role="alert">
@@ -295,10 +424,18 @@ function RootSection({
                   selection={selection}
                   onToggleFolder={toggleFolder}
                   onOpenNote={openNote}
-                  onContextMenu={(event, dirPath) => onContextMenu(event, root.id, dirPath)}
+                  onContextMenu={(event, dirPath, renameTarget) =>
+                    onContextMenu(event, root.id, dirPath, renameTarget)
+                  }
                   pendingCreate={pendingCreate}
                   onConfirmCreate={(title) => onConfirmCreate(root.id, title)}
                   onCancelCreate={onCancelCreate}
+                  pendingRename={pendingRenameHere}
+                  onConfirmRename={(title) => onConfirmRename(root.id, title)}
+                  onCancelRename={onCancelRename}
+                  onDropItem={(fromPath, fromIsDirectory, toDirPath) =>
+                    onDropItem(root.id, fromPath, fromIsDirectory, toDirPath)
+                  }
                   depth={0}
                 />
               ))}
@@ -331,11 +468,14 @@ export function NotesPanel({
   onOpenNote,
   expandedPathsByRoot = NO_EXPANDED_PATHS,
   onExpandedPathsChange = noopExpandedPathsChange,
+  onNotePathChanged = noopNotePathChanged,
 }: NotesPanelProps) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
+  const [pendingRename, setPendingRename] = useState<PendingRename | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const { query, results, setQuery, clear: clearSearch } = useSearch();
   const isSearchMode = results !== null;
 
@@ -363,11 +503,19 @@ export function NotesPanel({
     [onOpenNote],
   );
 
-  const handleContextMenu = useCallback((event: React.MouseEvent, rootId: string, dirPath: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setContextMenu({ x: event.clientX, y: event.clientY, rootId, dirPath });
-  }, []);
+  const handleContextMenu = useCallback(
+    (
+      event: React.MouseEvent,
+      rootId: string,
+      dirPath: string,
+      renameTarget?: { path: string; isDirectory: boolean },
+    ) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setContextMenu({ x: event.clientX, y: event.clientY, rootId, dirPath, renameTarget });
+    },
+    [],
+  );
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
@@ -403,6 +551,79 @@ export function NotesPanel({
     [pendingCreate, refresh],
   );
 
+  const startRenameFromTarget = useCallback((rootId: string, path: string, isDirectory: boolean) => {
+    setPendingRename({ rootId, path, isDirectory });
+  }, []);
+
+  const startRenameFromContextMenu = useCallback(() => {
+    if (contextMenu === null || contextMenu.renameTarget === undefined) return;
+    startRenameFromTarget(contextMenu.rootId, contextMenu.renameTarget.path, contextMenu.renameTarget.isDirectory);
+    setContextMenu(null);
+  }, [contextMenu, startRenameFromTarget]);
+
+  const startRenameFromSelection = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key !== "F2" || selection === null) return;
+      event.preventDefault();
+      startRenameFromTarget(selection.rootId, selection.path, selection.isDirectory);
+    },
+    [selection, startRenameFromTarget],
+  );
+
+  useEffect(() => {
+    document.addEventListener("keydown", startRenameFromSelection);
+    return () => document.removeEventListener("keydown", startRenameFromSelection);
+  }, [startRenameFromSelection]);
+
+  const cancelRename = useCallback(() => setPendingRename(null), []);
+
+  const confirmRename = useCallback(
+    async (rootId: string, title: string) => {
+      if (pendingRename === null) return;
+
+      const trimmedTitle = title.trim();
+      if (trimmedTitle === "") {
+        throw new Error("title cannot be empty");
+      }
+
+      const name = pendingRename.isDirectory ? trimmedTitle : withMdExtension(trimmedTitle);
+      const fromPath = pendingRename.path;
+      const toPath = joinPath(parentDirPath(fromPath), name);
+
+      await invoke(COMMAND_MOVE_ITEM, { rootId, fromPath, toPath });
+
+      setPendingRename(null);
+      onNotePathChanged(rootId, fromPath, toPath);
+      refresh();
+    },
+    [pendingRename, refresh, onNotePathChanged],
+  );
+
+  // `fromIsDirectory` isn't needed by the move itself -- `git mv` treats files
+  // and directories identically -- but is kept in the callback shape since the
+  // drag payload naturally carries it.
+  const dropItem = useCallback(
+    async (rootId: string, fromPath: string, _fromIsDirectory: boolean, toDirPath: string) => {
+      if (isDescendantPath(toDirPath, fromPath)) {
+        setMoveError("cannot move a folder into itself or one of its own subfolders");
+        return;
+      }
+
+      const name = fromPath.slice(fromPath.lastIndexOf("/") + 1);
+      const toPath = joinPath(toDirPath, name);
+      if (toPath === fromPath) return;
+
+      try {
+        await invoke(COMMAND_MOVE_ITEM, { rootId, fromPath, toPath });
+        onNotePathChanged(rootId, fromPath, toPath);
+        refresh();
+      } catch (error) {
+        setMoveError(String(error));
+      }
+    },
+    [refresh, onNotePathChanged],
+  );
+
   return (
     <div className="notes-panel" data-testid="notes-panel">
       <div className="notes-panel__toolbar">
@@ -436,15 +657,25 @@ export function NotesPanel({
             pendingCreate={pendingCreate}
             onConfirmCreate={confirmCreate}
             onCancelCreate={cancelCreate}
+            pendingRename={pendingRename}
+            onConfirmRename={confirmRename}
+            onCancelRename={cancelRename}
+            onDropItem={dropItem}
           />
         ))}
       </div>
+      {moveError !== null && (
+        <p className="notes-panel__error" role="alert">
+          {moveError}
+        </p>
+      )}
       {contextMenu !== null && (
         <TreeContextMenu
           state={contextMenu}
           onClose={closeContextMenu}
           onCreateNote={() => startCreate("note")}
           onCreateFolder={() => startCreate("folder")}
+          onRename={startRenameFromContextMenu}
         />
       )}
     </div>

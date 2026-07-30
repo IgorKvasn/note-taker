@@ -118,7 +118,7 @@ pub fn validate_title(existing_siblings: &[String], title: &str) -> Result<Strin
 /// Lists the filenames already present in `dir`, for duplicate-title checks.
 /// Returns an empty list for a directory that doesn't exist yet, since a new
 /// directory has no siblings to collide with.
-fn sibling_names(dir: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn sibling_names(dir: &Path) -> Result<Vec<String>, String> {
     match fs::read_dir(dir) {
         Ok(entries) => entries
             .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
@@ -165,6 +165,42 @@ pub fn create_folder(path: &Path) -> Result<(), String> {
     fs::create_dir(parent.join(normalized_name)).map_err(|error| error.to_string())
 }
 
+/// Moves or renames a note or directory from `from_path` to `to_path`, both
+/// absolute, via `git mv` -- covering rename (same parent) and move (different
+/// parent) with one operation, since `git mv` treats files and directories
+/// identically and a rename is just a move whose parent doesn't change.
+///
+/// Rejects a move of a directory into its own descendant before ever touching
+/// git -- `git mv` itself doesn't reliably guard against this, and it must
+/// hold regardless of what the frontend's drag-and-drop already checked.
+/// Validates the destination name against its new siblings exactly like
+/// `create_note`/`create_folder` (duplicate/invalid-character checks), so a
+/// rejected move writes nothing.
+pub fn move_item(repo_path: &Path, from_path: &Path, to_path: &Path) -> Result<(), String> {
+    if to_path == from_path || to_path.starts_with(from_path) {
+        return Err("cannot move a folder into itself or one of its own subfolders".to_string());
+    }
+
+    let parent = to_path.parent().ok_or_else(|| "destination path has no parent directory".to_string())?;
+    let file_name = to_path
+        .file_name()
+        .ok_or_else(|| "destination path has no filename".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
+    let siblings = sibling_names(parent)?;
+    let normalized_name = validate_title(&siblings, &file_name)?;
+    let destination = parent.join(normalized_name);
+
+    let from_relative = from_path.strip_prefix(repo_path).map_err(|error| error.to_string())?;
+    let to_relative = destination.strip_prefix(repo_path).map_err(|error| error.to_string())?;
+
+    crate::gitutil::run_git_expecting_success(
+        repo_path,
+        &["mv", &from_relative.to_string_lossy(), &to_relative.to_string_lossy()],
+    )
+}
+
 /// Strips a raw file's leading `---`-delimited YAML frontmatter block, keeping
 /// only the `id` extraction private to this module -- search (§8) needs the
 /// body without frontmatter but has no business reading the ID.
@@ -204,7 +240,16 @@ mod tests {
 
     fn write_file(dir: &TempDir, name: &str, contents: &str) -> std::path::PathBuf {
         let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
         fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn write_dir(dir: &TempDir, name: &str) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        fs::create_dir_all(&path).unwrap();
         path
     }
 
@@ -467,5 +512,152 @@ mod tests {
         create_folder(&dir.path().join("new-folder")).unwrap();
 
         assert!(!dir.path().join(".git").exists());
+    }
+
+    fn git(repo_path: &Path, args: &[&str]) -> String {
+        let output = crate::gitutil::run_git(repo_path, args).unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    fn init_repo_with_committed_note(dir: &TempDir, relative: &str, contents: &str) {
+        git(dir.path(), &["init"]);
+        git(dir.path(), &["config", "user.email", "test@example.com"]);
+        git(dir.path(), &["config", "user.name", "Test"]);
+        write_file(dir, relative, contents);
+        git(dir.path(), &["add", relative]);
+        git(dir.path(), &["commit", "-m", "add note"]);
+    }
+
+    #[test]
+    fn move_item_renames_within_the_same_directory() {
+        let dir = TempDir::new().unwrap();
+        init_repo_with_committed_note(&dir, "old.md", "---\nid: 01J8X\n---\nbody\n");
+
+        move_item(dir.path(), &dir.path().join("old.md"), &dir.path().join("new.md")).unwrap();
+
+        assert!(!dir.path().join("old.md").exists());
+        assert!(dir.path().join("new.md").exists());
+    }
+
+    #[test]
+    fn move_item_moves_a_note_into_a_different_directory() {
+        let dir = TempDir::new().unwrap();
+        write_dir(&dir, "folder");
+        init_repo_with_committed_note(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
+
+        move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("folder/note.md")).unwrap();
+
+        assert!(!dir.path().join("note.md").exists());
+        assert!(dir.path().join("folder/note.md").exists());
+    }
+
+    #[test]
+    fn move_item_moves_a_folder_with_its_whole_subtree() {
+        let dir = TempDir::new().unwrap();
+        git(dir.path(), &["init"]);
+        git(dir.path(), &["config", "user.email", "test@example.com"]);
+        git(dir.path(), &["config", "user.name", "Test"]);
+        write_file(&dir, "source/nested/note.md", "---\nid: 01J8X\n---\nbody\n");
+        write_dir(&dir, "destination");
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "add tree"]);
+
+        move_item(dir.path(), &dir.path().join("source"), &dir.path().join("destination/source")).unwrap();
+
+        assert!(!dir.path().join("source").exists());
+        assert!(dir.path().join("destination/source/nested/note.md").exists());
+    }
+
+    #[test]
+    fn move_item_preserves_the_frontmatter_id_byte_identical_on_rename() {
+        let dir = TempDir::new().unwrap();
+        let original = "---\nid: 01J8XKEEP\n---\nbody\n";
+        init_repo_with_committed_note(&dir, "old.md", original);
+
+        move_item(dir.path(), &dir.path().join("old.md"), &dir.path().join("new.md")).unwrap();
+
+        let on_disk = fs::read_to_string(dir.path().join("new.md")).unwrap();
+        assert_eq!(on_disk, original);
+    }
+
+    #[test]
+    fn move_item_preserves_the_frontmatter_id_byte_identical_on_move_to_another_directory() {
+        let dir = TempDir::new().unwrap();
+        write_dir(&dir, "folder");
+        let original = "---\nid: 01J8XKEEP\n---\nbody\n";
+        init_repo_with_committed_note(&dir, "note.md", original);
+
+        move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("folder/note.md")).unwrap();
+
+        let on_disk = fs::read_to_string(dir.path().join("folder/note.md")).unwrap();
+        assert_eq!(on_disk, original);
+    }
+
+    #[test]
+    fn move_item_stages_a_git_mv_preserving_history_via_log_follow() {
+        let dir = TempDir::new().unwrap();
+        init_repo_with_committed_note(&dir, "old.md", "---\nid: 01J8X\n---\nbody\n");
+
+        move_item(dir.path(), &dir.path().join("old.md"), &dir.path().join("new.md")).unwrap();
+        git(dir.path(), &["commit", "-m", "rename note"]);
+
+        let log = git(dir.path(), &["log", "--follow", "--oneline", "--", "new.md"]);
+        assert!(log.contains("add note"), "git log --follow on the new path must show the original commit, got: {log}");
+    }
+
+    #[test]
+    fn move_item_rejects_a_move_into_a_directory_already_containing_that_title() {
+        let dir = TempDir::new().unwrap();
+        write_dir(&dir, "folder");
+        write_file(&dir, "folder/note.md", "---\nid: 01J8XOTHER\n---\nother\n");
+        init_repo_with_committed_note(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
+
+        let result = move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("folder/note.md"));
+
+        assert!(result.is_err());
+        assert!(dir.path().join("note.md").exists(), "source must be untouched on rejection");
+    }
+
+    #[test]
+    fn move_item_rejects_an_invalid_character_in_the_destination_name() {
+        let dir = TempDir::new().unwrap();
+        init_repo_with_committed_note(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
+
+        let result = move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("bad:name.md"));
+
+        assert!(result.is_err());
+        assert!(dir.path().join("note.md").exists(), "source must be untouched on rejection");
+    }
+
+    #[test]
+    fn move_item_rejects_dragging_a_folder_into_its_own_descendant() {
+        let dir = TempDir::new().unwrap();
+        git(dir.path(), &["init"]);
+        write_dir(&dir, "parent/child");
+
+        let result = move_item(
+            dir.path(),
+            &dir.path().join("parent"),
+            &dir.path().join("parent/child/parent"),
+        );
+
+        assert!(result.is_err());
+        assert!(dir.path().join("parent").exists());
+        assert!(dir.path().join("parent/child").exists());
+    }
+
+    #[test]
+    fn move_item_rejects_moving_a_path_onto_itself() {
+        let dir = TempDir::new().unwrap();
+        init_repo_with_committed_note(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
+
+        let result = move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("note.md"));
+
+        assert!(result.is_err());
     }
 }
