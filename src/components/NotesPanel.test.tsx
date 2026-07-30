@@ -202,4 +202,125 @@ describe("NotesPanel", () => {
     expect(first.getAttribute("data-selected")).toBeNull();
     expect(second.getAttribute("data-selected")).toBe("true");
   });
+
+  describe("create via context menu", () => {
+    it("shows New note / New folder on right-clicking empty space in a root's section", async () => {
+      mockTrees({ [ROOT_A.id]: [] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const section = (await screen.findByText("notes")).closest("section")!;
+      const body = section.querySelector(".notes-panel__section-body")!;
+      await userEvent.pointer({ keys: "[MouseRight]", target: body });
+
+      expect(await screen.findByRole("menuitem", { name: "New note" })).toBeDefined();
+      expect(screen.getByRole("menuitem", { name: "New folder" })).toBeDefined();
+    });
+
+    it("creates a top-level pending item when right-clicking empty space", async () => {
+      mockTrees({ [ROOT_A.id]: [] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const section = (await screen.findByText("notes")).closest("section")!;
+      const body = section.querySelector(".notes-panel__section-body")!;
+      await userEvent.pointer({ keys: "[MouseRight]", target: body });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "New note" }));
+
+      expect(await screen.findByRole("textbox", { name: "New note title" })).toBeDefined();
+    });
+
+    it("right-clicking a folder creates the pending item inside it and auto-expands", async () => {
+      mockTrees({
+        [ROOT_A.id]: [folder("my-folder", "my-folder")],
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const folderButton = await screen.findByRole("button", { name: "my-folder" });
+      expect(folderButton.getAttribute("aria-expanded")).toBe("false");
+
+      await userEvent.pointer({ keys: "[MouseRight]", target: folderButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "New folder" }));
+
+      expect(await screen.findByRole("textbox", { name: "New folder title" })).toBeDefined();
+      expect(folderButton.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("right-clicking a note creates the pending item as a sibling in its parent directory", async () => {
+      mockTrees({
+        [ROOT_A.id]: [folder("my-folder", "my-folder", [note("child.md", "my-folder/child.md")])],
+      });
+      render(
+        <NotesPanel roots={[ROOT_A]} onOpenNote={noop} expandedPathsByRoot={{ [ROOT_A.id]: ["my-folder"] }} />,
+      );
+
+      const noteButton = await screen.findByRole("button", { name: "child.md" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: noteButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "New note" }));
+
+      const field = await screen.findByRole("textbox", { name: "New note title" });
+      // The pending field renders inside my-folder's list, alongside child.md.
+      expect(field.closest("ul")?.contains(await screen.findByText("child.md"))).toBe(true);
+    });
+
+    it("Enter confirms creation, calls create_note, and refreshes the tree", async () => {
+      let listCall = 0;
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") {
+          listCall += 1;
+          return Promise.resolve(listCall === 1 ? [] : [note("new-note.md", "new-note.md")]);
+        }
+        if (command === "create_note") return Promise.resolve(undefined);
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const section = (await screen.findByText("notes")).closest("section")!;
+      const body = section.querySelector(".notes-panel__section-body")!;
+      await userEvent.pointer({ keys: "[MouseRight]", target: body });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "New note" }));
+
+      const field = await screen.findByRole("textbox", { name: "New note title" });
+      await userEvent.type(field, "new-note{Enter}");
+
+      expect(await screen.findByText("new-note.md")).toBeDefined();
+      expect(invoke).toHaveBeenCalledWith("create_note", { rootId: ROOT_A.id, path: "new-note.md" });
+      expect(screen.queryByRole("textbox", { name: "New note title" })).toBeNull();
+    });
+
+    it("shows an inline error on a duplicate title and keeps the field open", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") return Promise.resolve([note("existing.md", "existing.md")]);
+        if (command === "create_note") return Promise.reject(new Error("\"existing.md\" already exists in this folder"));
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const section = (await screen.findByText("notes")).closest("section")!;
+      const body = section.querySelector(".notes-panel__section-body")!;
+      await userEvent.pointer({ keys: "[MouseRight]", target: body });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "New note" }));
+
+      const field = await screen.findByRole("textbox", { name: "New note title" });
+      await userEvent.type(field, "existing{Enter}");
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/already exists/);
+      expect(await screen.findByRole("textbox", { name: "New note title" })).toBeDefined();
+    });
+
+    it("Escape discards the pending item without calling the backend", async () => {
+      mockTrees({ [ROOT_A.id]: [] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const section = (await screen.findByText("notes")).closest("section")!;
+      const body = section.querySelector(".notes-panel__section-body")!;
+      await userEvent.pointer({ keys: "[MouseRight]", target: body });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "New note" }));
+
+      const field = await screen.findByRole("textbox", { name: "New note title" });
+      await userEvent.type(field, "abandoned{Escape}");
+
+      expect(screen.queryByRole("textbox", { name: "New note title" })).toBeNull();
+      expect(invoke).not.toHaveBeenCalledWith("create_note", expect.anything());
+    });
+  });
 });

@@ -76,6 +76,18 @@ fn save_note(root_id: String, path: String, content: String) -> Result<(), Strin
 }
 
 #[tauri::command]
+fn create_note(root_id: String, path: String) -> Result<(), String> {
+    let note_path = config::resolve_path_in_root(&root_id, &path)?;
+    notes::create_note(&note_path)
+}
+
+#[tauri::command]
+fn create_folder(root_id: String, path: String) -> Result<(), String> {
+    let folder_path = config::resolve_path_in_root(&root_id, &path)?;
+    notes::create_folder(&folder_path)
+}
+
+#[tauri::command]
 fn get_state() -> UiState {
     state::get_state()
 }
@@ -128,6 +140,8 @@ pub fn run() {
             list_tree,
             open_note,
             save_note,
+            create_note,
+            create_folder,
             get_state,
             save_state,
         ])

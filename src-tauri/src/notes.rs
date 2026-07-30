@@ -3,6 +3,7 @@ use std::path::Path;
 
 use serde::Serialize;
 use ulid::Ulid;
+use unicode_normalization::UnicodeNormalization;
 
 /// Everything the frontend needs to render an opened note in one call --
 /// deliberately not split into a content read and a separate conflict check,
@@ -74,6 +75,94 @@ pub fn read_note(path: &Path) -> Result<ReadNote, String> {
 pub fn write_note(path: &Path, id: &str, body: &str) -> Result<(), String> {
     let raw = format!("---\nid: {id}\n---\n{body}");
     fs::write(path, raw).map_err(|error| error.to_string())
+}
+
+/// Characters the filesystem/git tooling can't safely round-trip as part of a
+/// title: path separators (on either Unix or Windows, since notes may sync
+/// across machines), the Windows drive-letter separator, and any ASCII control
+/// character including DEL.
+const INVALID_TITLE_CHARS: [char; 3] = ['/', '\\', ':'];
+
+fn is_invalid_title_char(c: char) -> bool {
+    INVALID_TITLE_CHARS.contains(&c) || c.is_control()
+}
+
+/// Validates and NFC-normalizes a title before it is used as a filename,
+/// checking for invalid characters and duplicates against `existing_siblings`
+/// (the names already present in the same directory the title would be
+/// created in -- title uniqueness is per-directory, matching filesystem
+/// semantics, not per-root).
+///
+/// Rejects rather than silently sanitizing invalid characters. Normalizes to
+/// NFC before comparing so an NFD-composed incoming title is still caught as a
+/// duplicate of an NFC name already on disk (existing siblings are normalized
+/// too, since files written by other tools/machines may be NFD).
+pub fn validate_title(existing_siblings: &[String], title: &str) -> Result<String, String> {
+    if let Some(bad_char) = title.chars().find(|c| is_invalid_title_char(*c)) {
+        return Err(format!("title contains an invalid character: {bad_char:?}"));
+    }
+
+    let normalized = title.nfc().collect::<String>();
+
+    let is_duplicate = existing_siblings
+        .iter()
+        .any(|sibling| sibling.nfc().collect::<String>() == normalized);
+
+    if is_duplicate {
+        return Err(format!("\"{normalized}\" already exists in this folder"));
+    }
+
+    Ok(normalized)
+}
+
+/// Lists the filenames already present in `dir`, for duplicate-title checks.
+/// Returns an empty list for a directory that doesn't exist yet, since a new
+/// directory has no siblings to collide with.
+fn sibling_names(dir: &Path) -> Result<Vec<String>, String> {
+    match fs::read_dir(dir) {
+        Ok(entries) => entries
+            .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Creates a new note at `path` with fresh frontmatter carrying a new ULID and
+/// an empty body. The title (the filename) is validated against its siblings
+/// in the same directory before anything is written -- a rejected title
+/// writes nothing.
+pub fn create_note(path: &Path) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| "note path has no parent directory".to_string())?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "note path has no filename".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
+    let siblings = sibling_names(parent)?;
+    let normalized_name = validate_title(&siblings, &file_name)?;
+
+    write_note(&parent.join(normalized_name), &Ulid::generate().to_string(), "")
+}
+
+/// Creates a new, empty directory at `path`. A bare `mkdir` -- intermediate
+/// directories are not created, since the target is always a direct child of
+/// an existing tree node -- and never touches git (spec §4/§9.4: an empty
+/// directory produces no commit, an accepted gap).
+pub fn create_folder(path: &Path) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| "folder path has no parent directory".to_string())?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "folder path has no filename".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
+    let siblings = sibling_names(parent)?;
+    let normalized_name = validate_title(&siblings, &file_name)?;
+
+    fs::create_dir(parent.join(normalized_name)).map_err(|error| error.to_string())
 }
 
 /// Splits a raw file's leading `---`-delimited YAML frontmatter block from its
@@ -219,6 +308,156 @@ mod tests {
         // No .git directory exists at all -- if save_note touched git in any way
         // this would fail, proving the write is git-independent (spec §7).
         save_note(&path, "no git here\n").unwrap();
+
+        assert!(!dir.path().join(".git").exists());
+    }
+
+    #[test]
+    fn validate_title_rejects_each_invalid_character() {
+        for bad_char in ['/', '\\', ':', '\u{0007}'] {
+            let title = format!("note{bad_char}title");
+            let result = validate_title(&[], &title);
+            assert!(result.is_err(), "expected {bad_char:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn validate_title_does_not_sanitize_it_just_rejects() {
+        let result = validate_title(&[], "bad/name.md");
+        assert_eq!(
+            result.unwrap_err(),
+            "title contains an invalid character: '/'"
+        );
+    }
+
+    #[test]
+    fn validate_title_rejects_a_duplicate_in_the_same_directory() {
+        let siblings = vec!["existing.md".to_string()];
+        assert!(validate_title(&siblings, "existing.md").is_err());
+    }
+
+    #[test]
+    fn validate_title_allows_the_same_title_among_different_siblings() {
+        let siblings = vec!["other.md".to_string()];
+        assert!(validate_title(&siblings, "existing.md").is_ok());
+    }
+
+    #[test]
+    fn validate_title_normalizes_to_nfc() {
+        // "e" + combining acute accent (NFD) -- should normalize to the
+        // single precomposed "é" (NFC) codepoint.
+        let nfd_title = "cafe\u{0301}.md";
+        let normalized = validate_title(&[], nfd_title).unwrap();
+
+        assert_eq!(normalized, "café.md");
+        assert_eq!(normalized.chars().count(), 7, "café.md as NFC is 7 codepoints, one per visible character");
+    }
+
+    #[test]
+    fn validate_title_catches_an_nfd_title_matching_an_existing_nfc_name() {
+        // Existing sibling on disk is NFC-composed ("é" as one codepoint);
+        // the incoming title spells the same name in NFD (decomposed).
+        let siblings = vec!["café.md".to_string()];
+        let nfd_title = "cafe\u{0301}.md";
+
+        assert!(validate_title(&siblings, nfd_title).is_err());
+    }
+
+    #[test]
+    fn create_note_writes_fresh_frontmatter_with_a_new_ulid() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+
+        create_note(&path).unwrap();
+
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(on_disk.starts_with("---\nid: "));
+        assert!(on_disk.ends_with("---\n"));
+    }
+
+    #[test]
+    fn create_note_twice_in_succession_gets_different_ids() {
+        let dir = TempDir::new().unwrap();
+
+        create_note(&dir.path().join("first.md")).unwrap();
+        create_note(&dir.path().join("second.md")).unwrap();
+
+        let first = read_note(&dir.path().join("first.md")).unwrap();
+        let second = read_note(&dir.path().join("second.md")).unwrap();
+
+        assert_ne!(first.id, second.id);
+    }
+
+    #[test]
+    fn create_note_rejects_a_duplicate_title_and_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "note.md", "---\nid: 01J8X\n---\noriginal\n");
+
+        let result = create_note(&dir.path().join("note.md"));
+
+        assert!(result.is_err());
+        let on_disk = fs::read_to_string(dir.path().join("note.md")).unwrap();
+        assert_eq!(on_disk, "---\nid: 01J8X\n---\noriginal\n", "original file must be untouched");
+    }
+
+    #[test]
+    fn create_note_rejects_an_invalid_character_and_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+
+        let result = create_note(&dir.path().join("bad:name.md"));
+
+        assert!(result.is_err());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn create_note_allows_the_same_title_in_a_different_directory() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("other")).unwrap();
+        write_file(&dir, "note.md", "---\nid: 01J8X\n---\noriginal\n");
+
+        let result = create_note(&dir.path().join("other/note.md"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn create_folder_makes_a_bare_directory() {
+        let dir = TempDir::new().unwrap();
+
+        create_folder(&dir.path().join("new-folder")).unwrap();
+
+        assert!(dir.path().join("new-folder").is_dir());
+    }
+
+    #[test]
+    fn create_folder_rejects_a_duplicate_title_in_the_same_directory() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("existing")).unwrap();
+
+        let result = create_folder(&dir.path().join("existing"));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn create_folder_allows_the_same_title_in_a_different_root() {
+        let root_a = TempDir::new().unwrap();
+        let root_b = TempDir::new().unwrap();
+        fs::create_dir(root_a.path().join("shared-name")).unwrap();
+
+        let result = create_folder(&root_b.path().join("shared-name"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn create_folder_makes_no_git_visible_change() {
+        let dir = TempDir::new().unwrap();
+
+        // No .git directory exists at all -- if create_folder touched git in
+        // any way this would fail, proving it is git-independent (spec §4/§9.4).
+        create_folder(&dir.path().join("new-folder")).unwrap();
 
         assert!(!dir.path().join(".git").exists());
     }
