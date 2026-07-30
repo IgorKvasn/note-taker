@@ -39,3 +39,9 @@
   padding: 0 4px;
   cursor: pointer;
 }
+
+.root-sync-indicator__resolution-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--danger-color, #d94a4a);
+}

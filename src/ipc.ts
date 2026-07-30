@@ -23,6 +23,7 @@ export const COMMAND_GET_STATE = "get_state";
 export const COMMAND_SAVE_STATE = "save_state";
 export const COMMAND_SYNC_ROOT = "sync_root";
 export const COMMAND_GET_ROOT_STATUS = "get_root_status";
+export const COMMAND_MARK_RESOLVED = "mark_resolved";
 
 /** Emitted by the backend git sync chain (spec §7); one-way, never invoked. */
 export const EVENT_SYNC_STATUS = "sync-status";
@@ -135,6 +136,6 @@ export interface SyncStatusEvent {
 
 /** Mirrors `RootStatus` in `src-tauri/src/sync.rs`, returned by `get_root_status`. */
 export interface RootStatus {
-  conflicted_count: number;
+  conflicted_paths: string[];
   sync_state: SyncState;
 }

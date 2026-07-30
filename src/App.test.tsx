@@ -39,7 +39,7 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
     }
     if (command === "save_state") return Promise.resolve(undefined);
     if (command === "get_root_status") {
-      return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+      return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
     }
     return Promise.resolve(undefined);
   });
@@ -243,8 +243,10 @@ describe("App", () => {
     render(<App />);
     await screen.findByTestId("split-pane-left");
 
-    await waitFor(() => expect(screen.getByText("No note open")).toBeDefined());
-    expect(screen.queryByTestId("note-editor")).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByText("No note open")).toBeDefined();
+      expect(screen.queryByTestId("note-editor")).toBeNull();
+    });
   });
 
   it("keeps only one note open at a time when a second note is clicked", async () => {

@@ -31,7 +31,10 @@ pub fn open_note(root_path: &Path, path: &Path) -> Result<OpenNoteResult, String
     })
 }
 
-fn has_conflict_markers(body: &str) -> bool {
+/// Whether `body` still contains any leftover `<<<<<<<`/`=======`/`>>>>>>>`
+/// conflict marker line. Shared by `open_note` (deriving `is_conflicted`) and
+/// `sync::mark_resolved` (blocking resolution while markers remain).
+pub(crate) fn has_conflict_markers(body: &str) -> bool {
     body.lines().any(|line| {
         line.starts_with("<<<<<<< ") || line == "=======" || line.starts_with(">>>>>>> ")
     })

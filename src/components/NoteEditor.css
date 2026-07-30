@@ -25,6 +25,29 @@
   background-color: var(--surface-hover);
 }
 
+.note-editor__mark-resolved {
+  margin: 4px 0 4px 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--danger-color, #d94a4a);
+  border-radius: 4px;
+  background: none;
+  color: var(--danger-color, #d94a4a);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.note-editor__mark-resolved:hover {
+  background-color: var(--surface-hover);
+}
+
+.note-editor__resolve-error {
+  margin: 0;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--danger-color, #d94a4a);
+  font-size: 0.85rem;
+}
+
 .note-editor__body {
   flex: 1;
   overflow: hidden;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   COMMAND_CREATE_FOLDER,
@@ -279,6 +279,7 @@ interface RootSectionProps {
   onConfirmRename: (rootId: string, title: string) => Promise<void>;
   onCancelRename: () => void;
   onDropItem: (rootId: string, fromPath: string, fromIsDirectory: boolean, toDirPath: string) => void;
+  onConflictedPathsChange: (rootId: string, paths: string[]) => void;
 }
 
 function RootSection({
@@ -297,6 +298,7 @@ function RootSection({
   onConfirmRename,
   onCancelRename,
   onDropItem,
+  onConflictedPathsChange,
 }: RootSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [tree, setTree] = useState<TreeNode[] | null>(null);
@@ -395,7 +397,11 @@ function RootSection({
       >
         <span className="notes-panel__disclosure" data-expanded={isExpanded || undefined} aria-hidden="true" />
         {rootLabel(root)}
-        <RootSyncIndicator rootId={root.id} onSyncSettled={loadTree} />
+        <RootSyncIndicator
+          rootId={root.id}
+          onSyncSettled={loadTree}
+          onConflictedPathsChange={(paths) => onConflictedPathsChange(root.id, paths)}
+        />
       </button>
 
       {isExpanded && (
@@ -482,6 +488,30 @@ export function NotesPanel({
   const [moveError, setMoveError] = useState<string | null>(null);
   const { query, results, setQuery, clear: clearSearch } = useSearch();
   const isSearchMode = results !== null;
+
+  // Root IDs a conflict toast has already fired for (issue #26: "a one-time
+  // toast per affected root"). A ref, not state -- recording it must never
+  // itself trigger a re-render. Cleared for a root once its conflicts clear,
+  // so a later, separate conflict on the same root toasts again.
+  const toastedRootIds = useRef<Set<string>>(new Set());
+  const [toastRootIds, setToastRootIds] = useState<string[]>([]);
+
+  const handleConflictedPathsChange = useCallback((rootId: string, paths: string[]) => {
+    if (paths.length === 0) {
+      toastedRootIds.current.delete(rootId);
+      setToastRootIds((current) => current.filter((id) => id !== rootId));
+      return;
+    }
+    if (toastedRootIds.current.has(rootId)) {
+      return;
+    }
+    toastedRootIds.current.add(rootId);
+    setToastRootIds((current) => [...current, rootId]);
+  }, []);
+
+  const dismissToast = useCallback((rootId: string) => {
+    setToastRootIds((current) => current.filter((id) => id !== rootId));
+  }, []);
 
   const refresh = useCallback(() => setRefreshToken((token) => token + 1), []);
 
@@ -703,9 +733,27 @@ export function NotesPanel({
             onConfirmRename={confirmRename}
             onCancelRename={cancelRename}
             onDropItem={dropItem}
+            onConflictedPathsChange={handleConflictedPathsChange}
           />
         ))}
       </div>
+      {toastRootIds.length > 0 && (
+        <div className="notes-panel__conflict-toasts">
+          {toastRootIds.map((rootId) => {
+            const root = roots.find((candidate) => candidate.id === rootId);
+            return (
+              <div key={rootId} className="notes-panel__conflict-toast" role="status">
+                <p>
+                  {root === undefined ? "A root" : `"${rootLabel(root)}"`} has notes that need conflict resolution.
+                </p>
+                <button type="button" onClick={() => dismissToast(rootId)}>
+                  Got it
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {moveError !== null && (
         <p className="notes-panel__error" role="alert">
           {moveError}

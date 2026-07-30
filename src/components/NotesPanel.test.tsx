@@ -44,7 +44,7 @@ function note(name: string, path: string): TreeNode {
 function mockTrees(trees: Record<string, TreeNode[] | Error>, searchResults: SearchResult[] = []) {
   invoke.mockImplementation((command: string, args?: { rootId: string }) => {
     if (command === "get_root_status") {
-      return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+      return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
     }
     if (command === "search_notes") return Promise.resolve(searchResults);
     if (command !== "list_tree") return Promise.resolve(undefined);
@@ -411,7 +411,7 @@ describe("NotesPanel", () => {
         }
         if (command === "delete_item") return Promise.resolve(undefined);
         if (command === "get_root_status") {
-          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+          return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
         }
         return Promise.resolve(undefined);
       });
@@ -455,7 +455,7 @@ describe("NotesPanel", () => {
         }
         if (command === "delete_item") return Promise.resolve(undefined);
         if (command === "get_root_status") {
-          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+          return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
         }
         return Promise.resolve(undefined);
       });
@@ -479,7 +479,7 @@ describe("NotesPanel", () => {
         }
         if (command === "delete_item") return Promise.resolve(undefined);
         if (command === "get_root_status") {
-          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+          return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
         }
         return Promise.resolve(undefined);
       });
@@ -512,7 +512,7 @@ describe("NotesPanel", () => {
         }
         if (command === "delete_item") return Promise.resolve(undefined);
         if (command === "get_root_status") {
-          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+          return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
         }
         return Promise.resolve(undefined);
       });
@@ -545,7 +545,7 @@ describe("NotesPanel", () => {
         }
         if (command === "delete_item") return Promise.resolve(undefined);
         if (command === "get_root_status") {
-          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+          return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
         }
         return Promise.resolve(undefined);
       });
@@ -820,7 +820,7 @@ describe("NotesPanel", () => {
         if (command === "list_tree") return Promise.resolve([folder("target", "target"), note("note.md", "note.md")]);
         if (command === "move_item") return Promise.resolve(undefined);
         if (command === "get_root_status") {
-          return Promise.resolve({ conflicted_count: 0, sync_state: { state: "local_only" } });
+          return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
         }
         return Promise.resolve(undefined);
       });
@@ -901,6 +901,55 @@ describe("NotesPanel", () => {
       await waitFor(() =>
         expect(onNotePathChanged).toHaveBeenCalledWith(ROOT_A.id, "note.md", "target/note.md"),
       );
+    });
+  });
+
+  describe("conflict toast", () => {
+    function mockRootStatuses(statusesByRoot: Record<string, { conflicted_paths: string[] }>) {
+      invoke.mockImplementation((command: string, args?: { rootId: string }) => {
+        if (command === "get_root_status") {
+          const status = statusesByRoot[args!.rootId] ?? { conflicted_paths: [] };
+          return Promise.resolve({ conflicted_paths: status.conflicted_paths, sync_state: { state: "local_only" } });
+        }
+        if (command === "list_tree") return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+    }
+
+    it("shows a one-time toast naming the affected root when it has conflicts", async () => {
+      mockRootStatuses({ [ROOT_A.id]: { conflicted_paths: ["a.md"] } });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      expect(await screen.findByText(/need conflict resolution/)).not.toBeNull();
+    });
+
+    it("shows no toast for a root with no conflicts", async () => {
+      mockRootStatuses({ [ROOT_A.id]: { conflicted_paths: [] } });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      await screen.findByTestId("notes-panel");
+      expect(screen.queryByText(/need conflict resolution/)).toBeNull();
+    });
+
+    it("dismissing the toast hides it", async () => {
+      mockRootStatuses({ [ROOT_A.id]: { conflicted_paths: ["a.md"] } });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      await screen.findByText(/need conflict resolution/);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Got it" }));
+
+      expect(screen.queryByText(/need conflict resolution/)).toBeNull();
+    });
+
+    it("shows one toast per affected root when multiple roots have conflicts", async () => {
+      mockRootStatuses({
+        [ROOT_A.id]: { conflicted_paths: ["a.md"] },
+        [ROOT_B.id]: { conflicted_paths: ["b.md"] },
+      });
+      render(<NotesPanel roots={[ROOT_A, ROOT_B]} onOpenNote={noop} />);
+
+      await waitFor(() => expect(screen.getAllByRole("status")).toHaveLength(2));
     });
   });
 });

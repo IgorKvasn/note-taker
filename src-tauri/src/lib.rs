@@ -137,6 +137,26 @@ fn get_root_status(app: AppHandle, root_id: String) -> Result<RootStatus, String
     Ok(sync::root_status(Path::new(&root.path), last_known_state))
 }
 
+/// Marks one conflicted note as resolved (issue #26). Runs synchronously
+/// (unlike the save/create commands) so the editor can show an inline error
+/// immediately if markers remain, rather than round-tripping through the
+/// async sync-status event. On success, records and broadcasts the resulting
+/// sync state exactly like the background chain does, so the tree section's
+/// indicator and any other open note in this root stay in step.
+#[tauri::command]
+fn mark_resolved(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
+    let root = config::find_root_config(&root_id)?;
+    let absolute_path = config::resolve_path_in_root(&root_id, &path)?;
+    let repo_path = Path::new(&root.path);
+
+    let outcome = sync::mark_resolved(repo_path, &path, &absolute_path, root.auto_sync, &root.remote_url)?;
+
+    let manager = app.state::<Arc<SyncManager>>();
+    manager.record_state(&root_id, outcome.sync_state.clone());
+    sync::emit_status(&app, &root_id, outcome.sync_state);
+    Ok(())
+}
+
 /// The one call every save/create command makes to kick the sync chain off as
 /// a background task (spec §7). A root that fails to resolve (e.g. a stale ID
 /// from a since-removed root) just skips sync silently -- the mutation itself
@@ -234,6 +254,7 @@ pub fn run() {
             move_item,
             sync_root,
             get_root_status,
+            mark_resolved,
             search_notes,
             get_state,
             save_state,

@@ -32,14 +32,14 @@ describe("RootSyncIndicator", () => {
   });
 
   it("shows local_only before get_root_status resolves and after it resolves to local_only", async () => {
-    mockStatus({ conflicted_count: 0, sync_state: { state: "local_only" } });
+    mockStatus({ conflicted_paths: [], sync_state: { state: "local_only" } });
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
 
     expect(await screen.findByText("Local only")).not.toBeNull();
   });
 
   it("reflects a conflict status from get_root_status and offers a retry", async () => {
-    mockStatus({ conflicted_count: 1, sync_state: { state: "conflict" } });
+    mockStatus({ conflicted_paths: ["shared.md"], sync_state: { state: "conflict" } });
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
 
     await screen.findByText("Conflict");
@@ -47,7 +47,7 @@ describe("RootSyncIndicator", () => {
   });
 
   it("updates to syncing then synced as sync-status events arrive, calling onSyncSettled on the terminal state", async () => {
-    mockStatus({ conflicted_count: 0, sync_state: { state: "local_only" } });
+    mockStatus({ conflicted_paths: [], sync_state: { state: "local_only" } });
     const onSyncSettled = vi.fn();
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={onSyncSettled} />);
     await screen.findByText("Local only");
@@ -62,7 +62,7 @@ describe("RootSyncIndicator", () => {
   });
 
   it("ignores sync-status events for a different root", async () => {
-    mockStatus({ conflicted_count: 0, sync_state: { state: "local_only" } });
+    mockStatus({ conflicted_paths: [], sync_state: { state: "local_only" } });
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
     await screen.findByText("Local only");
 
@@ -72,7 +72,7 @@ describe("RootSyncIndicator", () => {
   });
 
   it("shows the raw stderr as a title on an error state and clicking retry calls sync_root", async () => {
-    mockStatus({ conflicted_count: 0, sync_state: { state: "error", stderr: "permission denied" } });
+    mockStatus({ conflicted_paths: [], sync_state: { state: "error", stderr: "permission denied" } });
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
 
     const indicator = (await screen.findByText("Sync failed")).closest(".root-sync-indicator");
@@ -82,5 +82,39 @@ describe("RootSyncIndicator", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(invoke).toHaveBeenCalledWith("sync_root", { rootId: ROOT_ID });
+  });
+
+  it("shows a resolution count and reports the conflicted paths when the root has conflicts", async () => {
+    mockStatus({ conflicted_paths: ["a.md", "b.md"], sync_state: { state: "conflict" } });
+    const onConflictedPathsChange = vi.fn();
+    render(
+      <RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} onConflictedPathsChange={onConflictedPathsChange} />,
+    );
+
+    expect(await screen.findByText("2 notes need resolution")).not.toBeNull();
+    await waitFor(() => expect(onConflictedPathsChange).toHaveBeenCalledWith(["a.md", "b.md"]));
+  });
+
+  it("shows no resolution count when the root has no conflicts", async () => {
+    mockStatus({ conflicted_paths: [], sync_state: { state: "local_only" } });
+    render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
+
+    await screen.findByText("Local only");
+    expect(screen.queryByText(/notes need resolution/)).toBeNull();
+  });
+
+  it("re-fetches root status and updates the resolution count when a sync-status event settles", async () => {
+    let status: RootStatus = { conflicted_paths: ["a.md"], sync_state: { state: "conflict" } };
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_root_status") return Promise.resolve(status);
+      return Promise.resolve(undefined);
+    });
+    render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
+    await screen.findByText("1 note needs resolution");
+
+    status = { conflicted_paths: [], sync_state: { state: "synced" } };
+    await emitSyncStatus({ root_id: ROOT_ID, state: { state: "synced" } });
+
+    await waitFor(() => expect(screen.queryByText(/needs? resolution/)).toBeNull());
   });
 });
