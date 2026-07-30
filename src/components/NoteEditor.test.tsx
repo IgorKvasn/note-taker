@@ -139,6 +139,23 @@ describe("NoteEditor", () => {
     expect(editableAgain.textContent).toContain("unsaved-edit");
   });
 
+  it("keeps the mode-toggle button as the last chrome child regardless of mode or sibling count", async () => {
+    const user = userEvent.setup();
+    mockInvoke({ open_note: { content: "<<<<<<< HEAD\n", id: "01LOADED", is_conflicted: true } });
+
+    const { container } = render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    await screen.findByRole("button", { name: /mark resolved/i });
+
+    // Edit mode with a conflict: three chrome children (toolbar, mark-resolved, toggle).
+    const chrome = container.querySelector(".note-editor__chrome");
+    expect(chrome?.lastElementChild).toBe(screen.getByRole("button", { name: /preview/i }));
+
+    await user.click(screen.getByRole("button", { name: /preview/i }));
+
+    // Preview mode: the toolbar is unmounted, so the toggle is often the only child.
+    expect(chrome?.lastElementChild).toBe(screen.getByRole("button", { name: /edit/i }));
+  });
+
   it("moves the cursor to scrollToOffset once content has loaded", async () => {
     mockInvoke({ open_note: { content: "one\ntwo\nthree\n", id: "01LOADED", is_conflicted: false } });
 
