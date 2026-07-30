@@ -130,6 +130,30 @@ describe("NotesPanel", () => {
     expect(screen.queryByText("image.png")).toBeNull();
   });
 
+  it("indents a top-level note one level deeper than the root header", async () => {
+    mockTrees({
+      [ROOT_A.id]: [folder("my-folder", "my-folder", [note("child.md", "my-folder/child.md")]), note("top.md", "top.md")],
+    });
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+    await screen.findByRole("button", { expanded: true });
+    const topLevelNote = screen.getByRole("button", { name: "top.md" });
+    const topLevelFolder = screen.getByRole("button", { name: "my-folder" });
+
+    const notePadding = parseInt(topLevelNote.style.paddingLeft, 10);
+    const folderPadding = parseInt(topLevelFolder.style.paddingLeft, 10);
+
+    // depth=0 (root header level) would be 8px; a top-level item must sit one level deeper.
+    expect(notePadding).toBeGreaterThan(8);
+    expect(notePadding).toBe(folderPadding);
+
+    await userEvent.click(topLevelFolder);
+    const nestedNote = await screen.findByRole("button", { name: "child.md" });
+    const nestedPadding = parseInt(nestedNote.style.paddingLeft, 10);
+
+    expect(nestedPadding).toBeGreaterThan(notePadding);
+  });
+
   it("toggles a folder's expand/collapse state and selects it on click", async () => {
     mockTrees({
       [ROOT_A.id]: [folder("my-folder", "my-folder", [note("child.md", "my-folder/child.md")])],

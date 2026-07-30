@@ -443,7 +443,7 @@ function RootSection({
                   onDropItem={(fromPath, fromIsDirectory, toDirPath) =>
                     onDropItem(root.id, fromPath, fromIsDirectory, toDirPath)
                   }
-                  depth={0}
+                  depth={1}
                 />
               ))}
               {pendingAtTopLevel && (
@@ -451,7 +451,7 @@ function RootSection({
                   kind={pendingCreate.kind}
                   onConfirm={(title) => onConfirmCreate(root.id, title)}
                   onCancel={onCancelCreate}
-                  depth={0}
+                  depth={1}
                 />
               )}
             </ul>
