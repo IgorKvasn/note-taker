@@ -1,7 +1,6 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
@@ -189,12 +188,7 @@ fn is_directory_writable(dir: &Path) -> bool {
 }
 
 fn git_remote_url(repo_path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .ok()?;
+    let output = crate::gitutil::run_git(repo_path, &["remote", "get-url", "origin"]).ok()?;
 
     if !output.status.success() {
         return None;
@@ -256,49 +250,16 @@ fn validate_drafts(drafts: &[RootDraft]) -> Vec<RootDraftError> {
 }
 
 fn git_init(repo_path: &Path) -> Result<(), String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .arg("init")
-        .output()
-        .map_err(|error| error.to_string())?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    crate::gitutil::run_git_expecting_success(repo_path, &["init"])
 }
 
 fn git_set_remote(repo_path: &Path, remote_url: &str, already_has_remote: bool) -> Result<(), String> {
     let subcommand = if already_has_remote { "set-url" } else { "add" };
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(["remote", subcommand, "origin", remote_url])
-        .output()
-        .map_err(|error| error.to_string())?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    crate::gitutil::run_git_expecting_success(repo_path, &["remote", subcommand, "origin", remote_url])
 }
 
 fn git_remove_remote(repo_path: &Path) -> Result<(), String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(["remote", "remove", "origin"])
-        .output()
-        .map_err(|error| error.to_string())?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    crate::gitutil::run_git_expecting_success(repo_path, &["remote", "remove", "origin"])
 }
 
 /// Validate-then-commit: every draft is checked read-only first via

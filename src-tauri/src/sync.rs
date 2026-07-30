@@ -8,13 +8,13 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::config::RootConfig;
+use crate::gitutil::{run_git, run_git_expecting_success, stderr_of};
 
 pub const EVENT_SYNC_STATUS: &str = "sync-status";
 
@@ -180,26 +180,8 @@ fn resolve_after_push_rejection(repo_path: &Path, push_stderr: &str) -> SyncStat
     }
 }
 
-fn run_git(repo_path: &Path, args: &[&str]) -> Result<Output, String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(args)
-        .output()
-        .map_err(|error| error.to_string())
-}
-
-fn stderr_of(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).trim().to_string()
-}
-
 fn git_add_all(repo_path: &Path) -> Result<(), String> {
-    let output = run_git(repo_path, &["add", "-A"])?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(stderr_of(&output))
-    }
+    run_git_expecting_success(repo_path, &["add", "-A"])
 }
 
 enum CommitError {
@@ -227,12 +209,7 @@ fn git_commit(repo_path: &Path) -> Result<(), CommitError> {
 }
 
 fn git_push(repo_path: &Path) -> Result<(), String> {
-    let output = run_git(repo_path, &["push"])?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(stderr_of(&output))
-    }
+    run_git_expecting_success(repo_path, &["push"])
 }
 
 enum MergeError {
@@ -298,6 +275,7 @@ pub fn root_status(repo_path: &Path, last_known_state: Option<SyncState>) -> Roo
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;

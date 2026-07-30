@@ -1,4 +1,5 @@
 mod config;
+mod gitutil;
 mod notes;
 mod search;
 mod state;
@@ -128,10 +129,13 @@ fn trigger_sync_for_root(app: &AppHandle, root_id: &str) {
 
 /// Stateless: `seq` is not tracked here, only echoed back on every result so
 /// the frontend can discard a response overtaken by a newer request (spec §8).
+/// Infallible by design -- a missing/unreadable root is skipped silently
+/// rather than surfaced here (spec §8) -- but `Result` all the same, matching
+/// every other command's IPC error shape.
 #[tauri::command]
-fn search_notes(query: String, seq: u64) -> Vec<SearchResult> {
+fn search_notes(query: String, seq: u64) -> Result<Vec<SearchResult>, String> {
     let roots = config::all_root_paths();
-    search::search_notes(&query, seq, &roots)
+    Ok(search::search_notes(&query, seq, &roots))
 }
 
 #[tauri::command]
