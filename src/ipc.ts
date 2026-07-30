@@ -13,6 +13,8 @@ export const COMMAND_SHOW_CONFIG_ERROR = "show_config_error";
 export const COMMAND_LIST_TREE = "list_tree";
 export const COMMAND_OPEN_NOTE = "open_note";
 export const COMMAND_SAVE_NOTE = "save_note";
+export const COMMAND_GET_STATE = "get_state";
+export const COMMAND_SAVE_STATE = "save_state";
 
 /** Mirrors `RootConfig` in `src-tauri/src/config.rs`. */
 export interface RootConfig {
@@ -68,4 +70,17 @@ export interface OpenNoteResult {
   content: string;
   id: string;
   is_conflicted: boolean;
+}
+
+/** Mirrors `LastOpenNote` in `src-tauri/src/state.rs`. */
+export interface LastOpenNote {
+  root_id: string;
+  path: string;
+}
+
+/** Mirrors `UiState` in `src-tauri/src/state.rs`. */
+export interface UiState {
+  split_ratio: number;
+  last_open_note: LastOpenNote | null;
+  expanded_paths: Record<string, string[]>;
 }

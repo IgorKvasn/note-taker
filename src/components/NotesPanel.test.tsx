@@ -104,6 +104,42 @@ describe("NotesPanel", () => {
     expect(screen.queryByText("child.md")).toBeNull();
   });
 
+  it("restores expanded folders per root from expandedPathsByRoot on mount", async () => {
+    mockTrees({
+      [ROOT_A.id]: [folder("my-folder", "my-folder", [note("child.md", "my-folder/child.md")])],
+    });
+    render(
+      <NotesPanel
+        roots={[ROOT_A]}
+        onOpenNote={noop}
+        expandedPathsByRoot={{ [ROOT_A.id]: ["my-folder"] }}
+      />,
+    );
+
+    const folderButton = await screen.findByRole("button", { name: "my-folder" });
+    expect(folderButton.getAttribute("aria-expanded")).toBe("true");
+    expect(await screen.findByText("child.md")).toBeDefined();
+  });
+
+  it("reports expanded-path changes per root via onExpandedPathsChange", async () => {
+    mockTrees({
+      [ROOT_A.id]: [folder("my-folder", "my-folder")],
+    });
+    const onExpandedPathsChange = vi.fn();
+    render(
+      <NotesPanel roots={[ROOT_A]} onOpenNote={noop} onExpandedPathsChange={onExpandedPathsChange} />,
+    );
+
+    const folderButton = await screen.findByRole("button", { name: "my-folder" });
+    await userEvent.click(folderButton);
+
+    expect(onExpandedPathsChange).toHaveBeenCalledWith(ROOT_A.id, ["my-folder"]);
+
+    await userEvent.click(folderButton);
+
+    expect(onExpandedPathsChange).toHaveBeenCalledWith(ROOT_A.id, []);
+  });
+
   it("does not crash when a root is missing or unreadable", async () => {
     mockTrees({ [ROOT_A.id]: new Error("No such file or directory (os error 2)") });
     render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);

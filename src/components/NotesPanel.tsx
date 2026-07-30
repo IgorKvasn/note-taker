@@ -6,7 +6,13 @@ import "./NotesPanel.css";
 interface NotesPanelProps {
   roots: RootConfig[];
   onOpenNote: (rootId: string, path: string) => void;
+  /** Persisted expanded folder paths, keyed by root ID. */
+  expandedPathsByRoot?: Record<string, string[]>;
+  onExpandedPathsChange?: (rootId: string, expandedPaths: string[]) => void;
 }
+
+const NO_EXPANDED_PATHS: Record<string, string[]> = {};
+const noopExpandedPathsChange = () => {};
 
 interface Selection {
   rootId: string;
@@ -91,13 +97,25 @@ interface RootSectionProps {
   onSelect: (selection: Selection) => void;
   onOpenNote: (rootId: string, path: string) => void;
   refreshToken: number;
+  initialExpandedPaths: string[];
+  onExpandedPathsChange: (rootId: string, expandedPaths: string[]) => void;
 }
 
-function RootSection({ root, selection, onSelect, onOpenNote, refreshToken }: RootSectionProps) {
+function RootSection({
+  root,
+  selection,
+  onSelect,
+  onOpenNote,
+  refreshToken,
+  initialExpandedPaths,
+  onExpandedPathsChange,
+}: RootSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [tree, setTree] = useState<TreeNode[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  // Seeded once from persisted state; the effect below re-derives `initialExpandedPaths`
+  // from props on every change instead, so this lazy initializer never re-reads it.
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(initialExpandedPaths));
 
   const loadTree = useCallback(() => {
     invoke<TreeNode[]>(COMMAND_LIST_TREE, { rootId: root.id })
@@ -124,11 +142,12 @@ function RootSection({ root, selection, onSelect, onOpenNote, refreshToken }: Ro
         } else {
           next.add(path);
         }
+        onExpandedPathsChange(root.id, Array.from(next));
         return next;
       });
       onSelect({ rootId: root.id, path });
     },
-    [onSelect, root.id],
+    [onExpandedPathsChange, onSelect, root.id],
   );
 
   const openNote = useCallback(
@@ -180,7 +199,12 @@ function RootSection({ root, selection, onSelect, onOpenNote, refreshToken }: Ro
   );
 }
 
-export function NotesPanel({ roots, onOpenNote }: NotesPanelProps) {
+export function NotesPanel({
+  roots,
+  onOpenNote,
+  expandedPathsByRoot = NO_EXPANDED_PATHS,
+  onExpandedPathsChange = noopExpandedPathsChange,
+}: NotesPanelProps) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -207,6 +231,8 @@ export function NotesPanel({ roots, onOpenNote }: NotesPanelProps) {
           onSelect={setSelection}
           onOpenNote={onOpenNote}
           refreshToken={refreshToken}
+          initialExpandedPaths={expandedPathsByRoot[root.id] ?? []}
+          onExpandedPathsChange={onExpandedPathsChange}
         />
       ))}
     </div>

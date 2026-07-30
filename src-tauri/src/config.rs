@@ -354,14 +354,15 @@ fn write_config(config: &Config) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
     // `config_path` reads $XDG_CONFIG_HOME through `directories::BaseDirs`, which is
-    // process-wide state, so tests that touch it must not run concurrently.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // process-wide state, so tests that touch it must not run concurrently. Shared
+    // with state.rs's tests, which touch the same env var.
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_xdg_config_home<T>(f: impl FnOnce(&Path) -> T) -> T {
         let _guard = ENV_LOCK.lock().unwrap();

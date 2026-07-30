@@ -13,6 +13,8 @@ const AUTOSAVE_DEBOUNCE_MS = 600;
 interface NoteEditorProps {
   rootId: string;
   path: string;
+  /** Called when `open_note` rejects, e.g. a persisted last-open note whose file was deleted. */
+  onOpenError?: () => void;
 }
 
 /**
@@ -21,7 +23,7 @@ interface NoteEditorProps {
  * CM6 transactions straight against this view, and a wrapper library would be
  * an abstraction to reach through (spec §1, §5).
  */
-export function NoteEditor({ rootId, path }: NoteEditorProps) {
+export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -72,14 +74,20 @@ export function NoteEditor({ rootId, path }: NoteEditorProps) {
     });
     viewRef.current = view;
 
-    invoke<OpenNoteResult>(COMMAND_OPEN_NOTE, { rootId, path }).then((result) => {
-      if (isCancelled) {
-        return;
-      }
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: result.content },
+    invoke<OpenNoteResult>(COMMAND_OPEN_NOTE, { rootId, path })
+      .then((result) => {
+        if (isCancelled) {
+          return;
+        }
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: result.content },
+        });
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          onOpenError?.();
+        }
       });
-    });
 
     return () => {
       isCancelled = true;

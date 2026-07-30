@@ -12,9 +12,9 @@ import {
 const CONTAINER_LEFT = 0;
 const CONTAINER_WIDTH = 1000;
 
-function renderSplitPane() {
+function renderSplitPane(props: Partial<Parameters<typeof SplitPane>[0]> = {}) {
   const view = render(
-    <SplitPane left={<p>left pane</p>} right={<p>right pane</p>} />,
+    <SplitPane left={<p>left pane</p>} right={<p>right pane</p>} {...props} />,
   );
 
   // jsdom has no layout, so the container reports a zero-width rect unless stubbed.
@@ -182,5 +182,57 @@ describe("SplitPane", () => {
     });
 
     expect(leftPaneRatio()).toBeCloseTo(60, 5);
+  });
+
+  it("seeds the initial ratio from the initialLeftRatio prop", () => {
+    renderSplitPane({ initialLeftRatio: 0.5 });
+
+    expect(leftPaneRatio()).toBeCloseTo(50, 5);
+  });
+
+  it("calls onLeftRatioChange once with the settled ratio when a drag ends", () => {
+    const onLeftRatioChange = vi.fn();
+    renderSplitPane({ onLeftRatioChange });
+
+    dragDividerTo(600);
+
+    expect(onLeftRatioChange).toHaveBeenCalledTimes(1);
+    expect(onLeftRatioChange).toHaveBeenCalledWith(0.6);
+  });
+
+  it("does not call onLeftRatioChange during intermediate mousemove ticks", () => {
+    const onLeftRatioChange = vi.fn();
+    renderSplitPane({ onLeftRatioChange });
+
+    const divider = screen.getByRole("separator");
+    act(() => {
+      divider.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 280 }));
+    });
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 400 }));
+    });
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 600 }));
+    });
+
+    expect(onLeftRatioChange).not.toHaveBeenCalled();
+
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, clientX: 600 }));
+    });
+
+    expect(onLeftRatioChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onLeftRatioChange on a keyboard adjustment", async () => {
+    const onLeftRatioChange = vi.fn();
+    renderSplitPane({ onLeftRatioChange });
+    const divider = screen.getByRole("separator");
+
+    divider.focus();
+    await userEvent.keyboard("{ArrowRight}");
+
+    expect(onLeftRatioChange).toHaveBeenCalledTimes(1);
+    expect(onLeftRatioChange).toHaveBeenCalledWith(DEFAULT_PANE_RATIO + 0.02);
   });
 });

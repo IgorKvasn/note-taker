@@ -1,5 +1,6 @@
 mod config;
 mod notes;
+mod state;
 mod tree;
 
 use tauri::menu::MenuBuilder;
@@ -8,6 +9,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use config::{Config, ConfigOutcome, RootDraft, RootValidation};
 use notes::OpenNoteResult;
+use state::UiState;
 use tree::TreeNode;
 
 pub const MENU_SETTINGS: &str = "settings";
@@ -73,6 +75,16 @@ fn save_note(root_id: String, path: String, content: String) -> Result<(), Strin
     notes::save_note(&note_path, &content)
 }
 
+#[tauri::command]
+fn get_state() -> UiState {
+    state::get_state()
+}
+
+#[tauri::command]
+fn save_state(state: UiState) -> Result<(), String> {
+    state::save_state(&state)
+}
+
 /// Shown once when `get_config` reports an unparseable config.toml. The frontend
 /// still renders a persistent in-webview error panel afterward -- this native dialog
 /// is a transient attention-getter, not the durable "main UI does not load" state.
@@ -116,6 +128,8 @@ pub fn run() {
             list_tree,
             open_note,
             save_note,
+            get_state,
+            save_state,
         ])
         .setup(|app| {
             // Flat menu bar: Settings, About and Quit are top-level actions with

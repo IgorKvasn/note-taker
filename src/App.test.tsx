@@ -16,6 +16,7 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
   invoke.mockImplementation((command: string) => {
     if (command in overrides) {
       const value = overrides[command];
+      if (typeof value === "function") return value();
       return value instanceof Promise ? value : Promise.resolve(value);
     }
     if (command === "get_app_version") return Promise.resolve("0.1.0");
@@ -28,6 +29,10 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
       return Promise.resolve({ content: "", id: "01NOTE", is_conflicted: false });
     }
     if (command === "save_note") return Promise.resolve(undefined);
+    if (command === "get_state") {
+      return Promise.resolve({ split_ratio: 0.28, last_open_note: null, expanded_paths: {} });
+    }
+    if (command === "save_state") return Promise.resolve(undefined);
     return Promise.resolve(undefined);
   });
 }
@@ -181,6 +186,57 @@ describe("App", () => {
       expect(invoke).toHaveBeenCalledWith("open_note", { rootId: EMPTY_CONFIG.roots[0].id, path: "note.md" }),
     );
     expect(await screen.findByText("hello world")).toBeDefined();
+  });
+
+  it("restores the last-open note from persisted state on mount", async () => {
+    mockInvoke({
+      list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
+      open_note: { content: "hello world", id: "01NOTE", is_conflicted: false },
+      get_state: {
+        split_ratio: 0.28,
+        last_open_note: { root_id: EMPTY_CONFIG.roots[0].id, path: "note.md" },
+        expanded_paths: {},
+      },
+    });
+    render(<App />);
+
+    expect(await screen.findByTestId("note-editor")).toBeDefined();
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("open_note", { rootId: EMPTY_CONFIG.roots[0].id, path: "note.md" }),
+    );
+  });
+
+  it("does not restore a last-open note whose root no longer exists in the config", async () => {
+    mockInvoke({
+      list_tree: [],
+      get_state: {
+        split_ratio: 0.28,
+        last_open_note: { root_id: "01STALE-ROOT", path: "note.md" },
+        expanded_paths: {},
+      },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    expect(screen.queryByTestId("note-editor")).toBeNull();
+    expect(screen.getByText("No note open")).toBeDefined();
+  });
+
+  it("falls back to the placeholder when a persisted last-open note's file no longer exists", async () => {
+    mockInvoke({
+      list_tree: [],
+      get_state: {
+        split_ratio: 0.28,
+        last_open_note: { root_id: EMPTY_CONFIG.roots[0].id, path: "deleted.md" },
+        expanded_paths: {},
+      },
+      open_note: () => Promise.reject(new Error("no such file or directory")),
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await waitFor(() => expect(screen.getByText("No note open")).toBeDefined());
+    expect(screen.queryByTestId("note-editor")).toBeNull();
   });
 
   it("keeps only one note open at a time when a second note is clicked", async () => {

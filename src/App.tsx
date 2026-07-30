@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AboutModal } from "./components/AboutModal";
@@ -6,6 +6,7 @@ import { NoteEditor } from "./components/NoteEditor";
 import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { SplitPane } from "./components/SplitPane";
+import { useUiState } from "./hooks/useUiState";
 import {
   COMMAND_GET_APP_VERSION,
   COMMAND_GET_CONFIG,
@@ -23,8 +24,17 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [configOutcome, setConfigOutcome] = useState<ConfigOutcome | null>(null);
   const [openNote, setOpenNote] = useState<{ rootId: string; path: string } | null>(null);
+  const { state: uiState, isLoaded: isUiStateLoaded, setSplitRatio, setLastOpenNote, setExpandedPaths } =
+    useUiState();
+  const hasRestoredOpenNote = useRef(false);
 
-  const openNoteHandler = useCallback((rootId: string, path: string) => setOpenNote({ rootId, path }), []);
+  const openNoteHandler = useCallback(
+    (rootId: string, path: string) => {
+      setOpenNote({ rootId, path });
+      setLastOpenNote({ root_id: rootId, path });
+    },
+    [setLastOpenNote],
+  );
 
   const loadConfig = useCallback(() => {
     invoke<ConfigOutcome>(COMMAND_GET_CONFIG).then(setConfigOutcome);
@@ -49,6 +59,26 @@ export function App() {
       .catch(() => setVersion(null));
   }, []);
 
+  // Restores the last-open note once both the config and persisted UI state have
+  // loaded. A note whose root no longer exists in the current config (e.g. the
+  // root was removed in Settings) is simply not restored -- no error, no crash.
+  useEffect(() => {
+    if (hasRestoredOpenNote.current || !isUiStateLoaded || configOutcome?.type !== "ok") {
+      return;
+    }
+    hasRestoredOpenNote.current = true;
+
+    const lastOpenNote = uiState.last_open_note;
+    if (lastOpenNote === null) {
+      return;
+    }
+
+    const rootStillExists = configOutcome.config.roots.some((root) => root.id === lastOpenNote.root_id);
+    if (rootStillExists) {
+      setOpenNote({ rootId: lastOpenNote.root_id, path: lastOpenNote.path });
+    }
+  }, [configOutcome, isUiStateLoaded, uiState.last_open_note]);
+
   useEffect(() => {
     // `listen` only resolves its unlisten fn after registration completes, which
     // can be after a strict-mode unmount -- so cleanup waits on the promise
@@ -61,6 +91,8 @@ export function App() {
       pendingUnlistenSettings.then((unlisten) => unlisten()).catch(() => {});
     };
   }, []);
+
+  const handleOpenNoteError = useCallback(() => setOpenNote(null), []);
 
   const closeAbout = useCallback(() => setIsAboutOpen(false), []);
   const closeSettings = useCallback(() => setIsSettingsOpen(false), []);
@@ -101,14 +133,28 @@ export function App() {
   return (
     <div className="app">
       <SplitPane
-        left={<NotesPanel roots={configOutcome.config.roots} onOpenNote={openNoteHandler} />}
+        initialLeftRatio={uiState.split_ratio}
+        onLeftRatioChange={setSplitRatio}
+        left={
+          <NotesPanel
+            roots={configOutcome.config.roots}
+            onOpenNote={openNoteHandler}
+            expandedPathsByRoot={uiState.expanded_paths}
+            onExpandedPathsChange={setExpandedPaths}
+          />
+        }
         right={
           openNote === null ? (
             <div className="pane pane--placeholder">
               <p>No note open</p>
             </div>
           ) : (
-            <NoteEditor key={`${openNote.rootId}:${openNote.path}`} rootId={openNote.rootId} path={openNote.path} />
+            <NoteEditor
+              key={`${openNote.rootId}:${openNote.path}`}
+              rootId={openNote.rootId}
+              path={openNote.path}
+              onOpenError={handleOpenNoteError}
+            />
           )
         }
       />

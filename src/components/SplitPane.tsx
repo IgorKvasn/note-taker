@@ -20,11 +20,16 @@ import "./SplitPane.css";
 interface SplitPaneProps {
   left: ReactNode;
   right: ReactNode;
+  /** Seeds the initial ratio, e.g. from persisted state; uncontrolled thereafter. */
+  initialLeftRatio?: number;
+  /** Called once the ratio settles (drag end or a keyboard step), not on every
+   * mousemove tick -- callers persisting this should not debounce on their own. */
+  onLeftRatioChange?: (leftRatio: number) => void;
 }
 
-export function SplitPane({ left, right }: SplitPaneProps) {
+export function SplitPane({ left, right, initialLeftRatio, onLeftRatioChange }: SplitPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [leftRatio, setLeftRatio] = useState(DEFAULT_PANE_RATIO);
+  const [leftRatio, setLeftRatio] = useState(initialLeftRatio ?? DEFAULT_PANE_RATIO);
   const [isDragging, setIsDragging] = useState(false);
 
   // Suppressing the default mousedown stops the browser starting a text
@@ -34,18 +39,23 @@ export function SplitPane({ left, right }: SplitPaneProps) {
     setIsDragging(true);
   }, []);
 
-  const adjustByKeyboard = useCallback((event: ReactKeyboardEvent) => {
-    const direction =
-      event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
-    if (direction === 0) {
-      return;
-    }
+  const adjustByKeyboard = useCallback(
+    (event: ReactKeyboardEvent) => {
+      const direction =
+        event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+      if (direction === 0) {
+        return;
+      }
 
-    event.preventDefault();
-    setLeftRatio((currentRatio) =>
-      clampPaneRatio(currentRatio + direction * KEYBOARD_RATIO_STEP),
-    );
-  }, []);
+      event.preventDefault();
+      setLeftRatio((currentRatio) => {
+        const nextRatio = clampPaneRatio(currentRatio + direction * KEYBOARD_RATIO_STEP);
+        onLeftRatioChange?.(nextRatio);
+        return nextRatio;
+      });
+    },
+    [onLeftRatioChange],
+  );
 
   useEffect(() => {
     if (!isDragging) {
@@ -66,7 +76,15 @@ export function SplitPane({ left, right }: SplitPaneProps) {
       );
     };
 
-    const stopDragging = () => setIsDragging(false);
+    // Reports the settled ratio once, on drag end, rather than persisting on
+    // every mousemove tick during the drag.
+    const stopDragging = () => {
+      setIsDragging(false);
+      setLeftRatio((currentRatio) => {
+        onLeftRatioChange?.(currentRatio);
+        return currentRatio;
+      });
+    };
 
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", stopDragging);
@@ -75,7 +93,7 @@ export function SplitPane({ left, right }: SplitPaneProps) {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", stopDragging);
     };
-  }, [isDragging]);
+  }, [isDragging, onLeftRatioChange]);
 
   return (
     <div
