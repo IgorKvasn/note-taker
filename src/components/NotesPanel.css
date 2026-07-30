@@ -7,8 +7,21 @@
 
 .notes-panel__toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
   padding: 4px 8px;
+}
+
+.notes-panel__search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-raised);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
 }
 
 .notes-panel__refresh {

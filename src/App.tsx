@@ -23,14 +23,14 @@ export function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [configOutcome, setConfigOutcome] = useState<ConfigOutcome | null>(null);
-  const [openNote, setOpenNote] = useState<{ rootId: string; path: string } | null>(null);
+  const [openNote, setOpenNote] = useState<{ rootId: string; path: string; scrollToOffset?: number } | null>(null);
   const { state: uiState, isLoaded: isUiStateLoaded, setSplitRatio, setLastOpenNote, setExpandedPaths } =
     useUiState();
   const hasRestoredOpenNote = useRef(false);
 
   const openNoteHandler = useCallback(
-    (rootId: string, path: string) => {
-      setOpenNote({ rootId, path });
+    (rootId: string, path: string, scrollToOffset?: number) => {
+      setOpenNote({ rootId, path, scrollToOffset });
       setLastOpenNote({ root_id: rootId, path });
     },
     [setLastOpenNote],
@@ -154,6 +154,7 @@ export function App() {
               rootId={openNote.rootId}
               path={openNote.path}
               onOpenError={handleOpenNoteError}
+              scrollToOffset={openNote.scrollToOffset}
             />
           )
         }

@@ -12,6 +12,21 @@ import "./NoteEditor.css";
 /** Debounce window between the last keystroke and the autosave `save_note` call. */
 const AUTOSAVE_DEBOUNCE_MS = 600;
 
+/** Places the cursor at `offset` and scrolls it into view, clamping to the
+ * document's length since a stale offset (content changed since it was
+ * computed) must not throw. */
+function moveCursorTo(view: EditorView, offset: number | undefined) {
+  if (offset === undefined) {
+    return;
+  }
+  const clamped = Math.max(0, Math.min(offset, view.state.doc.length));
+  view.dispatch({
+    selection: { anchor: clamped },
+    effects: EditorView.scrollIntoView(clamped, { y: "center" }),
+  });
+  view.focus();
+}
+
 type EditorMode = "edit" | "view";
 
 interface NoteEditorProps {
@@ -19,6 +34,13 @@ interface NoteEditorProps {
   path: string;
   /** Called when `open_note` rejects, e.g. a persisted last-open note whose file was deleted. */
   onOpenError?: () => void;
+  /**
+   * A character offset to move the cursor to and scroll into view once the
+   * note's content has loaded -- used by search result clicks to land on the
+   * first match (spec §8). Re-applied whenever the value changes, including
+   * repeat clicks on the same result for the same open note.
+   */
+  scrollToOffset?: number;
 }
 
 /**
@@ -27,10 +49,15 @@ interface NoteEditorProps {
  * straight against this view, and a wrapper library would be an abstraction
  * to reach through (spec §1, §5).
  */
-export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
+export function NoteEditor({ rootId, path, onOpenError, scrollToOffset }: NoteEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Read once the initial `open_note` resolves, inside the mount effect below --
+  // a ref rather than a dependency so the mount effect doesn't re-run on every
+  // scrollToOffset change (that's the second effect's job).
+  const scrollToOffsetRef = useRef(scrollToOffset);
+  scrollToOffsetRef.current = scrollToOffset;
   const pendingSaveRef = useRef<{ rootId: string; path: string; content: string } | null>(null);
   const [view, setView] = useState<EditorView | null>(null);
   const [mode, setMode] = useState<EditorMode>("edit");
@@ -93,6 +120,7 @@ export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
           changes: { from: 0, to: view.state.doc.length, insert: result.content },
         });
         setContent(result.content);
+        moveCursorTo(view, scrollToOffsetRef.current);
       })
       .catch(() => {
         if (!isCancelled) {
@@ -107,7 +135,17 @@ export function NoteEditor({ rootId, path, onOpenError }: NoteEditorProps) {
       viewRef.current = null;
       setView(null);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootId, path]);
+
+  // Re-applies on every `scrollToOffset` change while the note stays open (a
+  // repeat click on a search result for the already-open note), not just on
+  // initial load -- the effect above only runs when `rootId`/`path` change.
+  useEffect(() => {
+    if (viewRef.current !== null) {
+      moveCursorTo(viewRef.current, scrollToOffset);
+    }
+  }, [scrollToOffset]);
 
   return (
     <div className="note-editor">

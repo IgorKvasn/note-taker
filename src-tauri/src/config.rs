@@ -82,6 +82,22 @@ pub fn find_root_path(root_id: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("no root with id {root_id}"))
 }
 
+/// Resolves every configured root to its `(id, path)` pair, for commands like
+/// `search_notes` that span all roots at once rather than addressing one by ID
+/// (spec §9.4). An unreadable/missing config yields no roots rather than an
+/// error -- a command spanning all roots has nothing sensible to report a
+/// single error for, and an empty root list just means an empty result set.
+pub fn all_root_paths() -> Vec<(String, PathBuf)> {
+    match get_config() {
+        ConfigOutcome::Ok { config } => config
+            .roots
+            .into_iter()
+            .map(|root| (root.id, PathBuf::from(root.path)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Resolves `(root_id, relative_path)` to an absolute path, rejecting any result
 /// that escapes the root -- killing path traversal (`../../.ssh/id_rsa`) as a
 /// category rather than a check every command taking a relative path must

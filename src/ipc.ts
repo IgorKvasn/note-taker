@@ -15,6 +15,7 @@ export const COMMAND_OPEN_NOTE = "open_note";
 export const COMMAND_SAVE_NOTE = "save_note";
 export const COMMAND_CREATE_NOTE = "create_note";
 export const COMMAND_CREATE_FOLDER = "create_folder";
+export const COMMAND_SEARCH_NOTES = "search_notes";
 export const COMMAND_GET_STATE = "get_state";
 export const COMMAND_SAVE_STATE = "save_state";
 
@@ -72,6 +73,25 @@ export interface OpenNoteResult {
   content: string;
   id: string;
   is_conflicted: boolean;
+}
+
+/** Mirrors `MatchRange` in `src-tauri/src/search.rs`. */
+export interface MatchRange {
+  start: number;
+  end: number;
+}
+
+/** Mirrors `SearchResult` in `src-tauri/src/search.rs`. */
+export interface SearchResult {
+  root_id: string;
+  path: string;
+  directory_path: string;
+  title: string;
+  match_count: number;
+  snippet: string;
+  snippet_matches: MatchRange[];
+  first_match_offset: number | null;
+  seq: number;
 }
 
 /** Mirrors `LastOpenNote` in `src-tauri/src/state.rs`. */

@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NotesPanel } from "./NotesPanel";
-import type { RootConfig, TreeNode } from "../ipc";
+import type { RootConfig, SearchResult, TreeNode } from "../ipc";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -18,13 +18,29 @@ function note(name: string, path: string): TreeNode {
   return { name, path, is_directory: false, children: [] };
 }
 
-function mockTrees(trees: Record<string, TreeNode[] | Error>) {
+function mockTrees(trees: Record<string, TreeNode[] | Error>, searchResults: SearchResult[] = []) {
   invoke.mockImplementation((command: string, args?: { rootId: string }) => {
+    if (command === "search_notes") return Promise.resolve(searchResults);
     if (command !== "list_tree") return Promise.resolve(undefined);
     const result = trees[args!.rootId];
     if (result instanceof Error) return Promise.reject(result);
     return Promise.resolve(result ?? []);
   });
+}
+
+function searchResult(overrides: Partial<SearchResult> = {}): SearchResult {
+  return {
+    root_id: ROOT_A.id,
+    path: "match.md",
+    directory_path: "",
+    title: "match",
+    match_count: 1,
+    snippet: "has a match here",
+    snippet_matches: [{ start: 6, end: 11 }],
+    first_match_offset: 6,
+    seq: 0,
+    ...overrides,
+  };
 }
 
 const noop = () => {};
@@ -321,6 +337,98 @@ describe("NotesPanel", () => {
 
       expect(screen.queryByRole("textbox", { name: "New note title" })).toBeNull();
       expect(invoke).not.toHaveBeenCalledWith("create_note", expect.anything());
+    });
+  });
+
+  describe("search", () => {
+    it("does not search or swap the panel below 2 characters", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+      await screen.findByText("note.md");
+
+      await userEvent.type(screen.getByPlaceholderText("Search notes"), "a");
+
+      expect(invoke).not.toHaveBeenCalledWith("search_notes", expect.anything());
+      expect(screen.getByText("note.md")).toBeDefined();
+    });
+
+    it("swaps the tree for results after the debounce once 2+ characters are typed", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] }, [searchResult()]);
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+      await screen.findByText("note.md");
+
+      await userEvent.type(screen.getByPlaceholderText("Search notes"), "ab");
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("search_notes", { query: "ab", seq: expect.any(Number) }));
+      expect(await screen.findByTestId("search-results")).toBeDefined();
+      const treeItem = screen.getByText("note.md");
+      expect(treeItem.closest("[hidden]")).not.toBeNull();
+    });
+
+    it("shows the no-matches empty state when search returns nothing", async () => {
+      mockTrees({ [ROOT_A.id]: [] }, []);
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+      await screen.findByText("notes");
+
+      await userEvent.type(screen.getByPlaceholderText("Search notes"), "xyz");
+
+      expect(await screen.findByTestId("search-results-empty")).toBeDefined();
+    });
+
+    it("Escape clears the query and restores the tree", async () => {
+      mockTrees({ [ROOT_A.id]: [note("note.md", "note.md")] }, [searchResult()]);
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+      await screen.findByText("note.md");
+
+      const input = screen.getByPlaceholderText("Search notes");
+      await userEvent.type(input, "ab");
+      await screen.findByTestId("search-results");
+
+      await userEvent.type(input, "{Escape}");
+
+      expect(screen.queryByTestId("search-results")).toBeNull();
+      expect(await screen.findByText("note.md")).toBeDefined();
+      expect(input).toHaveProperty("value", "");
+    });
+
+    it("clearing the query restores the tree with expand state intact", async () => {
+      mockTrees(
+        { [ROOT_A.id]: [folder("my-folder", "my-folder", [note("child.md", "my-folder/child.md")])] },
+        [searchResult()],
+      );
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const folderButton = await screen.findByRole("button", { name: "my-folder" });
+      await userEvent.click(folderButton);
+      expect(await screen.findByText("child.md")).toBeDefined();
+
+      const input = screen.getByPlaceholderText("Search notes");
+      await userEvent.type(input, "ab");
+      await screen.findByTestId("search-results");
+
+      await userEvent.clear(input);
+
+      expect(screen.queryByTestId("search-results")).toBeNull();
+      const restoredFolderButton = await screen.findByRole("button", { name: "my-folder" });
+      expect(restoredFolderButton.getAttribute("aria-expanded")).toBe("true");
+      expect(await screen.findByText("child.md")).toBeDefined();
+    });
+
+    it("clicking a result opens the note and leaves the search panel intact", async () => {
+      const result = searchResult();
+      mockTrees({ [ROOT_A.id]: [] }, [result]);
+      const onOpenNote = vi.fn();
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={onOpenNote} />);
+      await screen.findByText("notes");
+
+      await userEvent.type(screen.getByPlaceholderText("Search notes"), "ab");
+      await screen.findByTestId("search-results");
+
+      await userEvent.click(screen.getByRole("button", { name: new RegExp(result.title) }));
+
+      expect(onOpenNote).toHaveBeenCalledWith(result.root_id, result.path, result.first_match_offset);
+      expect(await screen.findByTestId("search-results")).toBeDefined();
+      expect(screen.getByPlaceholderText("Search notes")).toHaveProperty("value", "ab");
     });
   });
 });
