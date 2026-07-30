@@ -87,4 +87,39 @@ describe("NoteEditor", () => {
     });
     expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "second.md" });
   });
+
+  it("toggles to the rendered view and back without losing unsaved edits", async () => {
+    const user = userEvent.setup();
+
+    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    await screen.findByText("# Loaded");
+
+    const editable = await screen.findByRole("textbox");
+    await user.click(editable);
+    await user.keyboard(" unsaved-edit");
+
+    await user.click(screen.getByRole("button", { name: /preview/i }));
+
+    const noteView = await screen.findByTestId("note-view");
+    expect(noteView.textContent).toContain("unsaved-edit");
+    expect(screen.queryByRole("textbox")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /edit/i }));
+
+    const editableAgain = await screen.findByRole("textbox");
+    expect(editableAgain.textContent).toContain("unsaved-edit");
+  });
+
+  it("hides the formatting toolbar while in the rendered view", async () => {
+    const user = userEvent.setup();
+
+    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    await screen.findByText("# Loaded");
+
+    expect(screen.getByTestId("note-toolbar")).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: /preview/i }));
+
+    expect(screen.queryByTestId("note-toolbar")).toBeNull();
+  });
 });
