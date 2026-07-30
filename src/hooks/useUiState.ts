@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { COMMAND_GET_STATE, COMMAND_SAVE_STATE, type LastOpenNote, type UiState } from "../ipc";
+import { COMMAND_GET_STATE, COMMAND_SAVE_STATE, type EditorMode, type LastOpenNote, type UiState } from "../ipc";
 import { DEFAULT_PANE_RATIO } from "../components/splitRatio";
 
 const DEFAULT_UI_STATE: UiState = {
@@ -8,15 +8,17 @@ const DEFAULT_UI_STATE: UiState = {
   last_open_note: null,
   expanded_paths: {},
   has_dismissed_local_only_notice: false,
+  editor_mode: "edit",
 };
 
 /** Debounce window between an expanded-paths/ratio change and the autosave `save_state` call. */
 const AUTOSAVE_DEBOUNCE_MS = 300;
 
 /**
- * Centralizes load/save of `state.toml`: pane split ratio, last-open note, and
- * expanded folders per root. Loads once on mount and autosaves on every change
- * thereafter -- there is no Save button for this data (spec issue #18).
+ * Centralizes load/save of `state.toml`: pane split ratio, last-open note,
+ * expanded folders per root, and global editor mode. Loads once on mount and
+ * autosaves on every change thereafter -- there is no Save button for this
+ * data (spec issue #18).
  */
 export function useUiState() {
   const [state, setState] = useState<UiState>(DEFAULT_UI_STATE);
@@ -86,5 +88,24 @@ export function useUiState() {
     });
   }, [scheduleSave]);
 
-  return { state, isLoaded, setSplitRatio, setLastOpenNote, setExpandedPaths, dismissLocalOnlyNotice };
+  const setEditorMode = useCallback(
+    (editorMode: EditorMode) => {
+      setState((current) => {
+        const next = { ...current, editor_mode: editorMode };
+        scheduleSave(next);
+        return next;
+      });
+    },
+    [scheduleSave],
+  );
+
+  return {
+    state,
+    isLoaded,
+    setSplitRatio,
+    setLastOpenNote,
+    setExpandedPaths,
+    dismissLocalOnlyNotice,
+    setEditorMode,
+  };
 }

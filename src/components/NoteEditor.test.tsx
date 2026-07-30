@@ -1,13 +1,27 @@
+import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NoteEditor } from "./NoteEditor";
-import type { SyncStatusEvent } from "../ipc";
+import type { EditorMode, SyncStatusEvent } from "../ipc";
 
 const invoke = vi.hoisted(() => vi.fn());
 const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
+
+/**
+ * Mirrors how `App.tsx` owns `mode` via `useUiState` (issue #37): `NoteEditor`
+ * no longer holds edit/preview mode as local state, so tests need a stand-in
+ * parent to supply and update it.
+ */
+function ControlledNoteEditor({
+  initialMode = "edit",
+  ...props
+}: Omit<Parameters<typeof NoteEditor>[0], "mode" | "onModeChange"> & { initialMode?: EditorMode }) {
+  const [mode, setMode] = useState<EditorMode>(initialMode);
+  return <NoteEditor {...props} mode={mode} onModeChange={setMode} />;
+}
 
 function mockInvoke(overrides: Record<string, unknown> = {}) {
   invoke.mockImplementation((command: string, args?: unknown) => {
@@ -43,14 +57,14 @@ describe("NoteEditor", () => {
   });
 
   it("loads the note's content via open_note and renders it in the editor", async () => {
-    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
     expect(await screen.findByText("Loaded")).toBeDefined();
   });
 
   it("renders exactly one CodeMirror editor instance", async () => {
-    const { container } = render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    const { container } = render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
 
     await screen.findByText("Loaded");
 
@@ -61,7 +75,7 @@ describe("NoteEditor", () => {
     const user = userEvent.setup();
     mockInvoke({ open_note: { content: "hello", id: "01LOADED", is_conflicted: false } });
 
-    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
     await screen.findByText("hello");
 
     const editable = await screen.findByRole("textbox");
@@ -75,7 +89,7 @@ describe("NoteEditor", () => {
   it("autosaves edited content to the correct file after the user stops typing", async () => {
     const user = userEvent.setup();
 
-    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
     await screen.findByText("Loaded");
 
@@ -99,7 +113,7 @@ describe("NoteEditor", () => {
   it("flushes a pending save for the previous note before switching to a new one", async () => {
     const user = userEvent.setup();
 
-    const { rerender } = render(<NoteEditor rootId="01ROOT" path="first.md" />);
+    const { rerender } = render(<ControlledNoteEditor rootId="01ROOT" path="first.md" />);
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "first.md" }));
     await screen.findByText("Loaded");
 
@@ -107,7 +121,7 @@ describe("NoteEditor", () => {
     await user.click(editable);
     await user.keyboard(" edited");
 
-    rerender(<NoteEditor rootId="01ROOT" path="second.md" />);
+    rerender(<ControlledNoteEditor rootId="01ROOT" path="second.md" />);
 
     expect(invoke).toHaveBeenCalledWith("save_note", {
       rootId: "01ROOT",
@@ -117,10 +131,25 @@ describe("NoteEditor", () => {
     expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "second.md" });
   });
 
+  it("keeps rendering in the mode passed by its caller across a note switch, rather than resetting to edit (issue #37)", async () => {
+    const onModeChange = vi.fn();
+    const { rerender } = render(<NoteEditor rootId="01ROOT" path="first.md" mode="view" onModeChange={onModeChange} />);
+
+    await screen.findByTestId("note-view");
+    expect(screen.queryByRole("textbox")).toBeNull();
+
+    rerender(<NoteEditor rootId="01ROOT" path="second.md" mode="view" onModeChange={onModeChange} />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "second.md" }));
+
+    expect(await screen.findByTestId("note-view")).toBeDefined();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByRole("button", { name: /edit/i })).toBeDefined();
+  });
+
   it("toggles to the rendered view and back without losing unsaved edits", async () => {
     const user = userEvent.setup();
 
-    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
     await screen.findByText("Loaded");
 
     const editable = await screen.findByRole("textbox");
@@ -143,7 +172,7 @@ describe("NoteEditor", () => {
     const user = userEvent.setup();
     mockInvoke({ open_note: { content: "<<<<<<< HEAD\n", id: "01LOADED", is_conflicted: true } });
 
-    const { container } = render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    const { container } = render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
     await screen.findByRole("button", { name: /mark resolved/i });
 
     // Edit mode with a conflict: three chrome children (toolbar, mark-resolved, toggle).
@@ -159,7 +188,7 @@ describe("NoteEditor", () => {
   it("moves the cursor to scrollToOffset once content has loaded", async () => {
     mockInvoke({ open_note: { content: "one\ntwo\nthree\n", id: "01LOADED", is_conflicted: false } });
 
-    render(<NoteEditor rootId="01ROOT" path="note.md" scrollToOffset={5} />);
+    render(<ControlledNoteEditor rootId="01ROOT" path="note.md" scrollToOffset={5} />);
     await screen.findByText("two");
 
     await screen.findByRole("textbox");
@@ -168,10 +197,10 @@ describe("NoteEditor", () => {
   });
 
   it("re-applies a new scrollToOffset while the same note stays open", async () => {
-    const { rerender } = render(<NoteEditor rootId="01ROOT" path="note.md" scrollToOffset={0} />);
+    const { rerender } = render(<ControlledNoteEditor rootId="01ROOT" path="note.md" scrollToOffset={0} />);
     await screen.findByText("Loaded");
 
-    rerender(<NoteEditor rootId="01ROOT" path="note.md" scrollToOffset={5} />);
+    rerender(<ControlledNoteEditor rootId="01ROOT" path="note.md" scrollToOffset={5} />);
 
     // No crash / no re-fetch of open_note for the same note+path.
     expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" });
@@ -181,7 +210,7 @@ describe("NoteEditor", () => {
   it("hides the formatting toolbar while in the rendered view", async () => {
     const user = userEvent.setup();
 
-    render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
     await screen.findByText("Loaded");
 
     expect(screen.getByTestId("note-toolbar")).toBeDefined();
@@ -194,7 +223,7 @@ describe("NoteEditor", () => {
   it("applies live markdown preview styling to raw syntax while in edit mode", async () => {
     mockInvoke({ open_note: { content: "**bold**\n", id: "01LOADED", is_conflicted: false } });
 
-    const { container } = render(<NoteEditor rootId="01ROOT" path="note.md" />);
+    const { container } = render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
 
     const strong = await waitFor(() => {
       const element = container.querySelector(".cm-live-preview-strong");
@@ -209,13 +238,13 @@ describe("NoteEditor", () => {
     it("shows a Mark resolved button when the note is conflicted", async () => {
       mockInvoke({ open_note: { content: "<<<<<<< HEAD\n", id: "01LOADED", is_conflicted: true } });
 
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
 
       expect(await screen.findByRole("button", { name: /mark resolved/i })).toBeDefined();
     });
 
     it("does not show a Mark resolved button when the note is not conflicted", async () => {
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
 
       await screen.findByText("Loaded");
 
@@ -226,7 +255,7 @@ describe("NoteEditor", () => {
       const user = userEvent.setup();
       mockInvoke({ open_note: { content: "<<<<<<< HEAD\n", id: "01LOADED", is_conflicted: true } });
 
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
       const resolveButton = await screen.findByRole("button", { name: /mark resolved/i });
 
       await user.click(resolveButton);
@@ -249,7 +278,7 @@ describe("NoteEditor", () => {
         return Promise.resolve(undefined);
       });
 
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
       const resolveButton = await screen.findByRole("button", { name: /mark resolved/i });
 
       await user.click(resolveButton);
@@ -262,7 +291,7 @@ describe("NoteEditor", () => {
     });
 
     it("re-fetches open_note when a sync-status event for its root settles, picking up new conflict markers", async () => {
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
       await screen.findByText("Loaded");
       expect(screen.queryByRole("button", { name: /mark resolved/i })).toBeNull();
 
@@ -273,7 +302,7 @@ describe("NoteEditor", () => {
     });
 
     it("ignores sync-status events for a different root", async () => {
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
       await screen.findByText("Loaded");
       invoke.mockClear();
 
@@ -285,7 +314,7 @@ describe("NoteEditor", () => {
     });
 
     it("does not re-fetch while the sync-status event reports syncing", async () => {
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
       await screen.findByText("Loaded");
       invoke.mockClear();
 
@@ -306,10 +335,10 @@ describe("NoteEditor", () => {
         return Promise.resolve(undefined);
       });
 
-      const { rerender } = render(<NoteEditor rootId="01ROOT" path="old.md" />);
+      const { rerender } = render(<ControlledNoteEditor rootId="01ROOT" path="old.md" />);
       await screen.findByText("CONTENT OF old.md");
 
-      rerender(<NoteEditor rootId="01ROOT" path="new.md" />);
+      rerender(<ControlledNoteEditor rootId="01ROOT" path="new.md" />);
       await screen.findByText("CONTENT OF new.md");
 
       // The listener registered while "old.md" was open should have been torn
@@ -329,7 +358,7 @@ describe("NoteEditor", () => {
     it("does not clobber an in-flight unsaved edit when a terminal sync-status event arrives", async () => {
       const user = userEvent.setup();
 
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
       await screen.findByText("Loaded");
 
       const editable = await screen.findByRole("textbox");
@@ -355,7 +384,7 @@ describe("NoteEditor", () => {
       const user = userEvent.setup();
       mockInvoke({ open_note: { content: "<<<<<<< HEAD\nstuff\n=======\n", id: "01LOADED", is_conflicted: true } });
 
-      render(<NoteEditor rootId="01ROOT" path="note.md" />);
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
       const editable = await screen.findByRole("textbox");
       await user.click(editable);
       await user.keyboard(" resolved-by-hand");

@@ -109,12 +109,16 @@ export interface LastOpenNote {
   path: string;
 }
 
+/** Mirrors `EditorMode` in `src-tauri/src/state.rs`. */
+export type EditorMode = "edit" | "view";
+
 /** Mirrors `UiState` in `src-tauri/src/state.rs`. */
 export interface UiState {
   split_ratio: number;
   last_open_note: LastOpenNote | null;
   expanded_paths: Record<string, string[]>;
   has_dismissed_local_only_notice: boolean;
+  editor_mode: EditorMode;
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   COMMAND_OPEN_NOTE,
   COMMAND_SAVE_NOTE,
   EVENT_SYNC_STATUS,
+  type EditorMode,
   type OpenNoteResult,
   type SyncStatusEvent,
 } from "../ipc";
@@ -42,11 +43,15 @@ function moveCursorTo(view: EditorView, offset: number | undefined) {
   view.focus();
 }
 
-type EditorMode = "edit" | "view";
-
 interface NoteEditorProps {
   rootId: string;
   path: string;
+  /**
+   * Edit/preview mode (issue #37): a global setting owned by the caller, not
+   * local state here, so it carries over when switching between notes.
+   */
+  mode: EditorMode;
+  onModeChange: (mode: EditorMode) => void;
   /** Called when `open_note` rejects, e.g. a persisted last-open note whose file was deleted. */
   onOpenError?: () => void;
   /**
@@ -64,7 +69,7 @@ interface NoteEditorProps {
  * straight against this view, and a wrapper library would be an abstraction
  * to reach through (spec §1, §5).
  */
-export function NoteEditor({ rootId, path, onOpenError, scrollToOffset }: NoteEditorProps) {
+export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scrollToOffset }: NoteEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -80,7 +85,6 @@ export function NoteEditor({ rootId, path, onOpenError, scrollToOffset }: NoteEd
   // applying its content and not overwrite a newer read with a stale one.
   const loadGenerationRef = useRef(0);
   const [view, setView] = useState<EditorView | null>(null);
-  const [mode, setMode] = useState<EditorMode>("edit");
   const [content, setContent] = useState("");
   const [isConflicted, setIsConflicted] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
@@ -139,7 +143,6 @@ export function NoteEditor({ rootId, path, onOpenError, scrollToOffset }: NoteEd
     });
     viewRef.current = view;
     setView(view);
-    setMode("edit");
 
     setIsConflicted(false);
     setResolveError(null);
@@ -257,7 +260,7 @@ export function NoteEditor({ rootId, path, onOpenError, scrollToOffset }: NoteEd
         <button
           type="button"
           className="note-editor__mode-toggle"
-          onClick={() => setMode((current) => (current === "edit" ? "view" : "edit"))}
+          onClick={() => onModeChange(mode === "edit" ? "view" : "edit")}
         >
           {mode === "edit" ? "Preview" : "Edit"}
         </button>

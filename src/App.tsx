@@ -34,6 +34,7 @@ export function App() {
     setLastOpenNote,
     setExpandedPaths,
     dismissLocalOnlyNotice,
+    setEditorMode,
   } = useUiState();
   const hasRestoredOpenNote = useRef(false);
   const [showLocalOnlyNotice, setShowLocalOnlyNotice] = useState(false);
@@ -205,6 +206,8 @@ export function App() {
               key={`${openNote.rootId}:${openNote.path}`}
               rootId={openNote.rootId}
               path={openNote.path}
+              mode={uiState.editor_mode}
+              onModeChange={setEditorMode}
               onOpenError={handleOpenNoteError}
               scrollToOffset={openNote.scrollToOffset}
             />

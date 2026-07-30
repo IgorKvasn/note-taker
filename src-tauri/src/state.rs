@@ -13,6 +13,14 @@ pub struct LastOpenNote {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EditorMode {
+    #[default]
+    Edit,
+    View,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UiState {
     #[serde(default = "default_split_ratio")]
@@ -28,6 +36,10 @@ pub struct UiState {
     /// local-only mode in general, not any one root's remote configuration.
     #[serde(default)]
     pub has_dismissed_local_only_notice: bool,
+    /// Global edit/preview mode (issue #37): a single app-wide setting rather than
+    /// per-note state, so it carries over when switching notes and across restarts.
+    #[serde(default)]
+    pub editor_mode: EditorMode,
 }
 
 fn default_split_ratio() -> f64 {
@@ -41,6 +53,7 @@ impl Default for UiState {
             last_open_note: None,
             expanded_paths: std::collections::HashMap::new(),
             has_dismissed_local_only_notice: false,
+            editor_mode: EditorMode::default(),
         }
     }
 }
@@ -126,6 +139,18 @@ mod tests {
     }
 
     #[test]
+    fn get_state_defaults_editor_mode_to_edit_when_field_is_absent_from_toml() {
+        with_xdg_config_home(|_| {
+            let path = state_path().unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "split_ratio = 0.42\n").unwrap();
+
+            let state = get_state();
+            assert_eq!(state.editor_mode, EditorMode::Edit);
+        });
+    }
+
+    #[test]
     fn state_round_trips_through_save_and_get() {
         with_xdg_config_home(|_| {
             let state = UiState {
@@ -139,6 +164,7 @@ mod tests {
                     vec!["folder".to_string(), "folder/sub".to_string()],
                 )]),
                 has_dismissed_local_only_notice: true,
+                editor_mode: EditorMode::View,
             };
 
             save_state(&state).unwrap();

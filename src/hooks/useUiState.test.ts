@@ -12,6 +12,7 @@ const SAVED_STATE: UiState = {
   last_open_note: { root_id: "01ROOT", path: "note.md" },
   expanded_paths: { "01ROOT": ["folder"] },
   has_dismissed_local_only_notice: false,
+  editor_mode: "edit",
 };
 
 describe("useUiState", () => {
@@ -47,6 +48,7 @@ describe("useUiState", () => {
       last_open_note: null,
       expanded_paths: {},
       has_dismissed_local_only_notice: false,
+      editor_mode: "edit",
     });
   });
 
@@ -126,6 +128,25 @@ describe("useUiState", () => {
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("save_state", {
         state: { ...SAVED_STATE, has_dismissed_local_only_notice: true },
+      }),
+    );
+  });
+
+  it("setEditorMode updates the mode and persists it", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_state") return Promise.resolve(SAVED_STATE);
+      return Promise.resolve(undefined);
+    });
+
+    const { result } = renderHook(() => useUiState());
+    await waitFor(() => expect(result.current.isLoaded).toBe(true));
+
+    act(() => result.current.setEditorMode("view"));
+
+    expect(result.current.state.editor_mode).toBe("view");
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_state", {
+        state: { ...SAVED_STATE, editor_mode: "view" },
       }),
     );
   });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -13,10 +13,10 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 const EMPTY_CONFIG: Config = { version: 1, roots: [{ id: "01ROOT", path: "/notes", auto_sync: false, remote_url: "" }] };
 
 function mockInvoke(overrides: Record<string, unknown> = {}) {
-  invoke.mockImplementation((command: string) => {
+  invoke.mockImplementation((command: string, args?: unknown) => {
     if (command in overrides) {
       const value = overrides[command];
-      if (typeof value === "function") return value();
+      if (typeof value === "function") return value(args);
       return value instanceof Promise ? value : Promise.resolve(value);
     }
     if (command === "get_app_version") return Promise.resolve("0.1.0");
@@ -35,6 +35,7 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
         last_open_note: null,
         expanded_paths: {},
         has_dismissed_local_only_notice: true,
+        editor_mode: "edit",
       });
     }
     if (command === "save_state") return Promise.resolve(undefined);
@@ -204,6 +205,7 @@ describe("App", () => {
         split_ratio: 0.28,
         last_open_note: { root_id: EMPTY_CONFIG.roots[0].id, path: "note.md" },
         expanded_paths: {},
+        editor_mode: "edit",
       },
     });
     render(<App />);
@@ -221,6 +223,7 @@ describe("App", () => {
         split_ratio: 0.28,
         last_open_note: { root_id: "01STALE-ROOT", path: "note.md" },
         expanded_paths: {},
+        editor_mode: "edit",
       },
     });
     render(<App />);
@@ -237,6 +240,7 @@ describe("App", () => {
         split_ratio: 0.28,
         last_open_note: { root_id: EMPTY_CONFIG.roots[0].id, path: "deleted.md" },
         expanded_paths: {},
+        editor_mode: "edit",
       },
       open_note: () => Promise.reject(new Error("no such file or directory")),
     });
@@ -278,6 +282,47 @@ describe("App", () => {
     expect(screen.queryAllByTestId("note-editor")).toHaveLength(1);
   });
 
+  it("keeps preview mode active after switching to a different note, and persists the setting (issue #37)", async () => {
+    mockInvoke({
+      list_tree: [
+        { name: "first.md", path: "first.md", is_directory: false, children: [] },
+        { name: "second.md", path: "second.md", is_directory: false, children: [] },
+      ],
+      open_note: (args?: { path: string }) =>
+        Promise.resolve({ content: `content of ${args!.path}`, id: "01NOTE", is_conflicted: false }),
+      get_state: {
+        split_ratio: 0.28,
+        last_open_note: null,
+        expanded_paths: {},
+        has_dismissed_local_only_notice: true,
+        editor_mode: "edit",
+      },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await userEvent.click(await screen.findByRole("button", { name: "first.md" }));
+    await screen.findByText("content of first.md");
+
+    await userEvent.click(screen.getByRole("button", { name: /preview/i }));
+    expect(await screen.findByTestId("note-view")).toBeDefined();
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "save_state",
+        expect.objectContaining({ state: expect.objectContaining({ editor_mode: "view" }) }),
+      ),
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "second.md" }));
+
+    const noteView = await screen.findByTestId("note-view");
+    await waitFor(() => expect(noteView.textContent).toContain("content of second.md"));
+    const { getByRole, queryByRole } = within(screen.getByTestId("split-pane-right"));
+    expect(queryByRole("textbox")).toBeNull();
+    expect(getByRole("button", { name: /edit/i })).toBeDefined();
+  });
+
   it("opens Settings from the menu event and lists existing roots", async () => {
     render(<App />);
     await screen.findByTestId("split-pane-left");
@@ -290,7 +335,13 @@ describe("App", () => {
 
   it("shows the local-only notice on the first local_only sync-status event and dismisses it, persisting the dismissal", async () => {
     mockInvoke({
-      get_state: { split_ratio: 0.28, last_open_note: null, expanded_paths: {}, has_dismissed_local_only_notice: false },
+      get_state: {
+        split_ratio: 0.28,
+        last_open_note: null,
+        expanded_paths: {},
+        has_dismissed_local_only_notice: false,
+        editor_mode: "edit",
+      },
     });
     render(<App />);
     await screen.findByTestId("split-pane-left");
@@ -326,7 +377,13 @@ describe("App", () => {
 
   it("never shows the local-only notice once it was already dismissed in a previous session", async () => {
     mockInvoke({
-      get_state: { split_ratio: 0.28, last_open_note: null, expanded_paths: {}, has_dismissed_local_only_notice: true },
+      get_state: {
+        split_ratio: 0.28,
+        last_open_note: null,
+        expanded_paths: {},
+        has_dismissed_local_only_notice: true,
+        editor_mode: "edit",
+      },
     });
     render(<App />);
     await screen.findByTestId("split-pane-left");
