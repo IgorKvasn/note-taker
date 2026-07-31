@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A force-push or a second push to a PR makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # Lifecycle scripts are skipped for supply-chain hardening; the only one
+      # here is husky's `prepare`, which installs git hooks CI has no use for.
+      - run: npm ci --ignore-scripts
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+  rust:
+    # Must match the release build host: the .deb links against 26.04's glibc,
+    # so checks run on the same release the artifact is built on. See README.md.
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Tauri build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            build-essential \
+            curl \
+            file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install Rust toolchain
+        run: rustup component add rustfmt clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # No frontend build here on purpose: tauri-build only enforces
+      # frontendDist when bundling, so check/clippy/test compile without dist.
+      - name: cargo fmt
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+  commit-messages:
+    # The husky commit-msg hook is bypassable (--no-verify, GitHub web edits,
+    # bot commits). release.sh derives the version bump from these subjects,
+    # so a malformed one silently downgrades a release to a patch.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    # The action reads the PR's commits from the REST API, not from git, so it
+    # needs this on top of the workflow-wide contents: read.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # The config is .mjs because this action only auto-discovers that
+      # extension and silently falls back to its own built-in conventional
+      # config otherwise -- which would drift from the husky hook's rules.
+      - uses: wagoid/commitlint-github-action@v6
+        with:
+          configFile: ./commitlint.config.mjs
