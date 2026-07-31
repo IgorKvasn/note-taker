@@ -62,6 +62,19 @@
   height: 100%;
 }
 
+/* CodeMirror's default caret is a hardcoded black border, invisible on the dark
+   surface. Both selectors are needed: .cm-cursor covers the drawSelection
+   layer, caret-color the native browser caret. */
+.note-editor__cm-host .cm-content {
+  caret-color: var(--text-color);
+}
+
+.note-editor__cm-host .cm-cursor,
+.note-editor__cm-host .cm-dropCursor {
+  border-left-color: var(--text-color);
+  border-left-width: 2px;
+}
+
 .note-editor__body > .note-view {
   height: 100%;
 }
