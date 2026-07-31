@@ -29,8 +29,14 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev build-essential curl file \
 ```bash
 npm run typecheck                 # tsc --noEmit
 npm test                          # vitest
+cd src-tauri && cargo fmt --all --check
+cd src-tauri && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo test        # backend + config invariants
 ```
+
+These same checks run in CI (`.github/workflows/ci.yml`) on every pull request
+and on pushes to `main`, on an `ubuntu-26.04` runner so the backend is checked
+against the same release the `.deb` is built on.
 
 ## Packaging
 
