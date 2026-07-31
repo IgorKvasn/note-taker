@@ -1,8 +1,12 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NoteView } from "./NoteView";
 
 describe("NoteView", () => {
+  beforeEach(() => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+  });
+
   it("renders a raw script tag inert, without executing it", () => {
     const { container } = render(<NoteView content={'before\n\n<script>window.__pwned = true;</script>\n\nafter'} />);
 
@@ -56,5 +60,66 @@ describe("NoteView", () => {
 
     expect(container.querySelector("code.language-js")).not.toBeNull();
     expect(container.querySelector(".hljs-keyword")).not.toBeNull();
+  });
+
+  it("renders a copy button for a fenced code block", () => {
+    const markdown = ["```js", "const x = 1;", "```"].join("\n");
+
+    render(<NoteView content={markdown} />);
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeDefined();
+  });
+
+  it("renders a copy button for a blockquote, including nested ones", () => {
+    const markdown = "> outer\n> > inner";
+
+    render(<NoteView content={markdown} />);
+
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(2);
+  });
+
+  it("copies the bare code text (no fences, no language tag) when the code block's copy button is clicked", async () => {
+    const markdown = ["```js", "const x = 1;", "```"].join("\n");
+    render(<NoteView content={markdown} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await vi.waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith("const x = 1;");
+    });
+  });
+
+  it("copies quote prose without `>` or `**` markers when the blockquote's copy button is clicked", async () => {
+    const markdown = "> Hello **world**";
+    render(<NoteView content={markdown} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await vi.waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Hello world");
+    });
+  });
+
+  it("does not leak a nested blockquote's own copy button label into the outer blockquote's copied text", async () => {
+    const markdown = "> outer\n> > inner";
+    render(<NoteView content={markdown} />);
+
+    // The nested blockquote's button precedes the outer's in DOM order, since it's
+    // nested inside the outer's content wrapper, which itself precedes the outer's button.
+    const [, outerButton] = screen.getAllByRole("button", { name: "Copy" });
+    fireEvent.click(outerButton);
+
+    await vi.waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith("outer\n\ninner");
+    });
+  });
+
+  it("shows a success toast after a copy", async () => {
+    const markdown = ["```js", "const x = 1;", "```"].join("\n");
+    render(<NoteView content={markdown} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe("Copied to clipboard");
   });
 });

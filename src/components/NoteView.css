@@ -17,6 +17,7 @@
 }
 
 .note-view pre {
+  position: relative;
   padding: 8px;
   overflow-x: auto;
   background-color: var(--surface-sunken);
@@ -24,8 +25,32 @@
 }
 
 .note-view blockquote {
+  position: relative;
   margin-left: 0;
   padding-left: 12px;
   border-left: 3px solid var(--border-color);
   color: var(--text-muted);
+}
+
+.copyable-block__copy-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--surface-raised);
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.note-view pre:hover .copyable-block__copy-button,
+.note-view pre:focus-within .copyable-block__copy-button,
+.note-view blockquote:hover .copyable-block__copy-button,
+.note-view blockquote:focus-within .copyable-block__copy-button {
+  opacity: 1;
 }
