@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_window_state::StateFlags;
 
 use config::{Config, ConfigOutcome, RootDraft, RootValidation};
 use notes::OpenNoteResult;
@@ -238,6 +239,14 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // FULLSCREEN is deliberately excluded: quitting while fullscreen would reopen
+        // fullscreen with no way to reach the GTK menubar. SIZE skips recording while
+        // maximized, so MAXIMIZED restores maximized while keeping the restored-down size.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             get_config,
