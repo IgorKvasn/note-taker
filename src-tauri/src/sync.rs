@@ -376,10 +376,29 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
-    fn init_repo(dir: &Path) {
-        run_git(dir, &["init"]).unwrap();
+    /// A bare repo's HEAD follows `init.defaultBranch`, so on a host defaulting
+    /// to `master` it would point at a ref these tests never push, leaving
+    /// clones with nothing checked out and no upstream branch to merge.
+    fn init_bare_remote(dir: &Path) {
+        run_git(dir, &["init", "--bare", "--initial-branch=main"]).unwrap();
+    }
+
+    /// Commits need an author, and the sandboxed git in CI has no global one.
+    fn set_identity(dir: &Path) {
         run_git(dir, &["config", "user.email", "test@example.com"]).unwrap();
         run_git(dir, &["config", "user.name", "Test"]).unwrap();
+    }
+
+    /// The branch name is pinned rather than left to `init.defaultBranch`:
+    /// these tests push to `refs/heads/main`, so a host defaulting to `master`
+    /// would leave the local and upstream branch names mismatched.
+    ///
+    /// Only for creating a repo. On an existing clone use `set_identity`, since
+    /// re-running `git init` there would rename the branch out from under the
+    /// upstream tracking the clone already set up.
+    fn init_repo(dir: &Path) {
+        run_git(dir, &["init", "--initial-branch=main"]).unwrap();
+        set_identity(dir);
     }
 
     fn write_and_stage(dir: &Path, name: &str, contents: &str) {
@@ -428,7 +447,7 @@ mod tests {
     #[test]
     fn sync_once_pushes_to_a_configured_remote_and_reports_synced() {
         let remote_dir = TempDir::new().unwrap();
-        run_git(remote_dir.path(), &["init", "--bare"]).unwrap();
+        init_bare_remote(remote_dir.path());
 
         let dir = TempDir::new().unwrap();
         init_repo(dir.path());
@@ -467,11 +486,10 @@ mod tests {
     #[test]
     fn sync_once_merges_and_repushes_after_a_rejected_push() {
         let remote_dir = TempDir::new().unwrap();
-        run_git(remote_dir.path(), &["init", "--bare"]).unwrap();
+        init_bare_remote(remote_dir.path());
 
         // Clone A seeds the remote's initial history.
         let clone_a = TempDir::new().unwrap();
-        run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
         run_git(
             clone_a.path(),
@@ -503,7 +521,7 @@ mod tests {
             .output()
             .unwrap();
         assert!(clone.status.success());
-        init_repo(clone_b.path());
+        set_identity(clone_b.path());
 
         // Clone A pushes a second, unrelated commit that clone B doesn't have.
         write_and_stage(clone_a.path(), "a-only.md", "from a\n");
@@ -528,10 +546,9 @@ mod tests {
     #[test]
     fn sync_once_reports_conflict_when_the_merge_leaves_markers() {
         let remote_dir = TempDir::new().unwrap();
-        run_git(remote_dir.path(), &["init", "--bare"]).unwrap();
+        init_bare_remote(remote_dir.path());
 
         let clone_a = TempDir::new().unwrap();
-        run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
         run_git(
             clone_a.path(),
@@ -562,7 +579,7 @@ mod tests {
             .output()
             .unwrap();
         assert!(clone.status.success());
-        init_repo(clone_b.path());
+        set_identity(clone_b.path());
 
         // Clone A edits the same line of the shared file and pushes.
         write_and_stage(clone_a.path(), "shared.md", "base, edited by a\n");
@@ -585,10 +602,9 @@ mod tests {
     /// `shared.md`, by diverging two clones on the same line and merging.
     fn seed_a_real_merge_conflict(dir: &Path) {
         let remote_dir = TempDir::new().unwrap();
-        run_git(remote_dir.path(), &["init", "--bare"]).unwrap();
+        init_bare_remote(remote_dir.path());
 
         let clone_a = TempDir::new().unwrap();
-        run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
         run_git(
             clone_a.path(),
@@ -618,7 +634,7 @@ mod tests {
             .output()
             .unwrap();
         assert!(clone.status.success());
-        init_repo(dir);
+        set_identity(dir);
 
         write_and_stage(clone_a.path(), "shared.md", "base, edited by a\n");
         run_git(clone_a.path(), &["add", "-A"]).unwrap();
@@ -716,10 +732,9 @@ mod tests {
     #[test]
     fn mark_resolved_leaves_the_merge_open_while_other_conflicted_files_remain() {
         let remote_dir = TempDir::new().unwrap();
-        run_git(remote_dir.path(), &["init", "--bare"]).unwrap();
+        init_bare_remote(remote_dir.path());
 
         let clone_a = TempDir::new().unwrap();
-        run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
         run_git(
             clone_a.path(),
@@ -751,7 +766,7 @@ mod tests {
             .output()
             .unwrap();
         assert!(clone.status.success());
-        init_repo(clone_b.path());
+        set_identity(clone_b.path());
 
         // Clone A edits both shared files and pushes.
         write_and_stage(clone_a.path(), "first.md", "base, edited by a\n");
@@ -788,10 +803,9 @@ mod tests {
     #[test]
     fn mark_resolved_pushes_after_finishing_the_merge_when_a_remote_is_configured() {
         let remote_dir = TempDir::new().unwrap();
-        run_git(remote_dir.path(), &["init", "--bare"]).unwrap();
+        init_bare_remote(remote_dir.path());
 
         let clone_a = TempDir::new().unwrap();
-        run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
         run_git(
             clone_a.path(),
@@ -822,7 +836,7 @@ mod tests {
             .output()
             .unwrap();
         assert!(clone.status.success());
-        init_repo(clone_b.path());
+        set_identity(clone_b.path());
 
         write_and_stage(clone_a.path(), "shared.md", "base, edited by a\n");
         run_git(clone_a.path(), &["add", "-A"]).unwrap();
