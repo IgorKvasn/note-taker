@@ -22,7 +22,8 @@ pub struct OpenNoteResult {
 /// leftover `<<<<<<<`/`=======`/`>>>>>>>` markers (spec §7).
 pub fn open_note(root_path: &Path, path: &Path) -> Result<OpenNoteResult, String> {
     let note = read_note(path)?;
-    let is_conflicted = root_path.join(".git").join("MERGE_HEAD").exists() && has_conflict_markers(&note.body);
+    let is_conflicted =
+        root_path.join(".git").join("MERGE_HEAD").exists() && has_conflict_markers(&note.body);
 
     Ok(OpenNoteResult {
         content: note.body,
@@ -65,11 +66,17 @@ pub fn read_note(path: &Path) -> Result<ReadNote, String> {
     let (existing_id, body) = split_frontmatter(&raw);
 
     match existing_id {
-        Some(id) => Ok(ReadNote { body: body.to_string(), id }),
+        Some(id) => Ok(ReadNote {
+            body: body.to_string(),
+            id,
+        }),
         None => {
             let id = Ulid::generate().to_string();
             write_note(path, &id, body)?;
-            Ok(ReadNote { body: body.to_string(), id })
+            Ok(ReadNote {
+                body: body.to_string(),
+                id,
+            })
         }
     }
 }
@@ -137,7 +144,9 @@ pub(crate) fn sibling_names(dir: &Path) -> Result<Vec<String>, String> {
 /// in the same directory before anything is written -- a rejected title
 /// writes nothing.
 pub fn create_note(path: &Path) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| "note path has no parent directory".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "note path has no parent directory".to_string())?;
     let file_name = path
         .file_name()
         .ok_or_else(|| "note path has no filename".to_string())?
@@ -147,7 +156,11 @@ pub fn create_note(path: &Path) -> Result<(), String> {
     let siblings = sibling_names(parent)?;
     let normalized_name = validate_title(&siblings, &file_name)?;
 
-    write_note(&parent.join(normalized_name), &Ulid::generate().to_string(), "")
+    write_note(
+        &parent.join(normalized_name),
+        &Ulid::generate().to_string(),
+        "",
+    )
 }
 
 /// Creates a new, empty directory at `path`. A bare `mkdir` -- intermediate
@@ -155,7 +168,9 @@ pub fn create_note(path: &Path) -> Result<(), String> {
 /// an existing tree node -- and never touches git (spec §4/§9.4: an empty
 /// directory produces no commit, an accepted gap).
 pub fn create_folder(path: &Path) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| "folder path has no parent directory".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "folder path has no parent directory".to_string())?;
     let file_name = path
         .file_name()
         .ok_or_else(|| "folder path has no filename".to_string())?
@@ -198,7 +213,9 @@ pub fn move_item(repo_path: &Path, from_path: &Path, to_path: &Path) -> Result<(
         return Err("cannot move a folder into itself or one of its own subfolders".to_string());
     }
 
-    let parent = to_path.parent().ok_or_else(|| "destination path has no parent directory".to_string())?;
+    let parent = to_path
+        .parent()
+        .ok_or_else(|| "destination path has no parent directory".to_string())?;
     let file_name = to_path
         .file_name()
         .ok_or_else(|| "destination path has no filename".to_string())?
@@ -209,12 +226,20 @@ pub fn move_item(repo_path: &Path, from_path: &Path, to_path: &Path) -> Result<(
     let normalized_name = validate_title(&siblings, &file_name)?;
     let destination = parent.join(normalized_name);
 
-    let from_relative = from_path.strip_prefix(repo_path).map_err(|error| error.to_string())?;
-    let to_relative = destination.strip_prefix(repo_path).map_err(|error| error.to_string())?;
+    let from_relative = from_path
+        .strip_prefix(repo_path)
+        .map_err(|error| error.to_string())?;
+    let to_relative = destination
+        .strip_prefix(repo_path)
+        .map_err(|error| error.to_string())?;
 
     crate::gitutil::run_git_expecting_success(
         repo_path,
-        &["mv", &from_relative.to_string_lossy(), &to_relative.to_string_lossy()],
+        &[
+            "mv",
+            &from_relative.to_string_lossy(),
+            &to_relative.to_string_lossy(),
+        ],
     )
 }
 
@@ -273,7 +298,11 @@ mod tests {
     #[test]
     fn reads_the_id_and_strips_frontmatter_from_an_already_tagged_note() {
         let dir = TempDir::new().unwrap();
-        let path = write_file(&dir, "note.md", "---\nid: 01J8XEXISTING\n---\n# Hello\n\nBody text.\n");
+        let path = write_file(
+            &dir,
+            "note.md",
+            "---\nid: 01J8XEXISTING\n---\n# Hello\n\nBody text.\n",
+        );
 
         let note = read_note(&path).unwrap();
 
@@ -292,7 +321,10 @@ mod tests {
         assert_eq!(note.body, "# Hello\n\nBody text.\n");
 
         let on_disk = fs::read_to_string(&path).unwrap();
-        assert_eq!(on_disk, format!("---\nid: {}\n---\n# Hello\n\nBody text.\n", note.id));
+        assert_eq!(
+            on_disk,
+            format!("---\nid: {}\n---\n# Hello\n\nBody text.\n", note.id)
+        );
     }
 
     #[test]
@@ -304,7 +336,10 @@ mod tests {
         read_note(&path).unwrap();
 
         let on_disk = fs::read_to_string(&path).unwrap();
-        assert_eq!(on_disk, original, "reading a note that already has an id must not rewrite the file");
+        assert_eq!(
+            on_disk, original,
+            "reading a note that already has an id must not rewrite the file"
+        );
     }
 
     #[test]
@@ -315,7 +350,10 @@ mod tests {
         write_note(&path, "01J8XNEW", "# Title\n\nUpdated body.\n").unwrap();
 
         let on_disk = fs::read_to_string(&path).unwrap();
-        assert_eq!(on_disk, "---\nid: 01J8XNEW\n---\n# Title\n\nUpdated body.\n");
+        assert_eq!(
+            on_disk,
+            "---\nid: 01J8XNEW\n---\n# Title\n\nUpdated body.\n"
+        );
     }
 
     #[test]
@@ -419,7 +457,11 @@ mod tests {
         let normalized = validate_title(&[], nfd_title).unwrap();
 
         assert_eq!(normalized, "café.md");
-        assert_eq!(normalized.chars().count(), 7, "café.md as NFC is 7 codepoints, one per visible character");
+        assert_eq!(
+            normalized.chars().count(),
+            7,
+            "café.md as NFC is 7 codepoints, one per visible character"
+        );
     }
 
     #[test]
@@ -466,7 +508,10 @@ mod tests {
 
         assert!(result.is_err());
         let on_disk = fs::read_to_string(dir.path().join("note.md")).unwrap();
-        assert_eq!(on_disk, "---\nid: 01J8X\n---\noriginal\n", "original file must be untouched");
+        assert_eq!(
+            on_disk, "---\nid: 01J8X\n---\noriginal\n",
+            "original file must be untouched"
+        );
     }
 
     #[test]
@@ -600,7 +645,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         init_repo_with_committed_note(&dir, "old.md", "---\nid: 01J8X\n---\nbody\n");
 
-        move_item(dir.path(), &dir.path().join("old.md"), &dir.path().join("new.md")).unwrap();
+        move_item(
+            dir.path(),
+            &dir.path().join("old.md"),
+            &dir.path().join("new.md"),
+        )
+        .unwrap();
 
         assert!(!dir.path().join("old.md").exists());
         assert!(dir.path().join("new.md").exists());
@@ -612,7 +662,12 @@ mod tests {
         write_dir(&dir, "folder");
         init_repo_with_committed_note(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
 
-        move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("folder/note.md")).unwrap();
+        move_item(
+            dir.path(),
+            &dir.path().join("note.md"),
+            &dir.path().join("folder/note.md"),
+        )
+        .unwrap();
 
         assert!(!dir.path().join("note.md").exists());
         assert!(dir.path().join("folder/note.md").exists());
@@ -629,10 +684,18 @@ mod tests {
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-m", "add tree"]);
 
-        move_item(dir.path(), &dir.path().join("source"), &dir.path().join("destination/source")).unwrap();
+        move_item(
+            dir.path(),
+            &dir.path().join("source"),
+            &dir.path().join("destination/source"),
+        )
+        .unwrap();
 
         assert!(!dir.path().join("source").exists());
-        assert!(dir.path().join("destination/source/nested/note.md").exists());
+        assert!(dir
+            .path()
+            .join("destination/source/nested/note.md")
+            .exists());
     }
 
     #[test]
@@ -641,7 +704,12 @@ mod tests {
         let original = "---\nid: 01J8XKEEP\n---\nbody\n";
         init_repo_with_committed_note(&dir, "old.md", original);
 
-        move_item(dir.path(), &dir.path().join("old.md"), &dir.path().join("new.md")).unwrap();
+        move_item(
+            dir.path(),
+            &dir.path().join("old.md"),
+            &dir.path().join("new.md"),
+        )
+        .unwrap();
 
         let on_disk = fs::read_to_string(dir.path().join("new.md")).unwrap();
         assert_eq!(on_disk, original);
@@ -654,7 +722,12 @@ mod tests {
         let original = "---\nid: 01J8XKEEP\n---\nbody\n";
         init_repo_with_committed_note(&dir, "note.md", original);
 
-        move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("folder/note.md")).unwrap();
+        move_item(
+            dir.path(),
+            &dir.path().join("note.md"),
+            &dir.path().join("folder/note.md"),
+        )
+        .unwrap();
 
         let on_disk = fs::read_to_string(dir.path().join("folder/note.md")).unwrap();
         assert_eq!(on_disk, original);
@@ -665,11 +738,22 @@ mod tests {
         let dir = TempDir::new().unwrap();
         init_repo_with_committed_note(&dir, "old.md", "---\nid: 01J8X\n---\nbody\n");
 
-        move_item(dir.path(), &dir.path().join("old.md"), &dir.path().join("new.md")).unwrap();
+        move_item(
+            dir.path(),
+            &dir.path().join("old.md"),
+            &dir.path().join("new.md"),
+        )
+        .unwrap();
         git(dir.path(), &["commit", "-m", "rename note"]);
 
-        let log = git(dir.path(), &["log", "--follow", "--oneline", "--", "new.md"]);
-        assert!(log.contains("add note"), "git log --follow on the new path must show the original commit, got: {log}");
+        let log = git(
+            dir.path(),
+            &["log", "--follow", "--oneline", "--", "new.md"],
+        );
+        assert!(
+            log.contains("add note"),
+            "git log --follow on the new path must show the original commit, got: {log}"
+        );
     }
 
     #[test]
@@ -679,10 +763,17 @@ mod tests {
         write_file(&dir, "folder/note.md", "---\nid: 01J8XOTHER\n---\nother\n");
         init_repo_with_committed_note(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
 
-        let result = move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("folder/note.md"));
+        let result = move_item(
+            dir.path(),
+            &dir.path().join("note.md"),
+            &dir.path().join("folder/note.md"),
+        );
 
         assert!(result.is_err());
-        assert!(dir.path().join("note.md").exists(), "source must be untouched on rejection");
+        assert!(
+            dir.path().join("note.md").exists(),
+            "source must be untouched on rejection"
+        );
     }
 
     #[test]
@@ -690,10 +781,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         init_repo_with_committed_note(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
 
-        let result = move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("bad:name.md"));
+        let result = move_item(
+            dir.path(),
+            &dir.path().join("note.md"),
+            &dir.path().join("bad:name.md"),
+        );
 
         assert!(result.is_err());
-        assert!(dir.path().join("note.md").exists(), "source must be untouched on rejection");
+        assert!(
+            dir.path().join("note.md").exists(),
+            "source must be untouched on rejection"
+        );
     }
 
     #[test]
@@ -718,7 +816,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         init_repo_with_committed_note(&dir, "note.md", "---\nid: 01J8X\n---\nbody\n");
 
-        let result = move_item(dir.path(), &dir.path().join("note.md"), &dir.path().join("note.md"));
+        let result = move_item(
+            dir.path(),
+            &dir.path().join("note.md"),
+            &dir.path().join("note.md"),
+        );
 
         assert!(result.is_err());
     }

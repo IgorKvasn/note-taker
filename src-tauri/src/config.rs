@@ -60,7 +60,12 @@ pub struct RootValidation {
 /// `get_config`'s Missing/Invalid/Ok model can distinguish -- e.g. no `$HOME`.
 pub fn config_path() -> Option<PathBuf> {
     let base_dirs = BaseDirs::new()?;
-    Some(base_dirs.config_dir().join("note-taker").join("config.toml"))
+    Some(
+        base_dirs
+            .config_dir()
+            .join("note-taker")
+            .join("config.toml"),
+    )
 }
 
 /// Resolves a root's configured path from its stable ID, as every IPC command
@@ -150,12 +155,18 @@ pub fn get_config() -> ConfigOutcome {
     let raw = match fs::read_to_string(&config_path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return ConfigOutcome::Missing,
-        Err(error) => return ConfigOutcome::Invalid { error: error.to_string() },
+        Err(error) => {
+            return ConfigOutcome::Invalid {
+                error: error.to_string(),
+            }
+        }
     };
 
     match toml::from_str::<Config>(&raw) {
         Ok(config) => ConfigOutcome::Ok { config },
-        Err(error) => ConfigOutcome::Invalid { error: error.to_string() },
+        Err(error) => ConfigOutcome::Invalid {
+            error: error.to_string(),
+        },
     }
 }
 
@@ -168,7 +179,11 @@ pub fn validate_root_path(path: &str) -> RootValidation {
     let exists = path.exists();
     let is_writable = exists && path.is_dir() && is_directory_writable(path);
     let is_git_repo = exists && path.join(".git").exists();
-    let remote_url = if is_git_repo { git_remote_url(path) } else { None };
+    let remote_url = if is_git_repo {
+        git_remote_url(path)
+    } else {
+        None
+    };
     let has_remote = remote_url.is_some();
 
     RootValidation {
@@ -259,9 +274,16 @@ fn git_init(repo_path: &Path) -> Result<(), String> {
     crate::gitutil::run_git_expecting_success(repo_path, &["init"])
 }
 
-fn git_set_remote(repo_path: &Path, remote_url: &str, already_has_remote: bool) -> Result<(), String> {
+fn git_set_remote(
+    repo_path: &Path,
+    remote_url: &str,
+    already_has_remote: bool,
+) -> Result<(), String> {
     let subcommand = if already_has_remote { "set-url" } else { "add" };
-    crate::gitutil::run_git_expecting_success(repo_path, &["remote", subcommand, "origin", remote_url])
+    crate::gitutil::run_git_expecting_success(
+        repo_path,
+        &["remote", subcommand, "origin", remote_url],
+    )
 }
 
 fn git_remove_remote(repo_path: &Path) -> Result<(), String> {
@@ -283,7 +305,9 @@ pub fn save_config(drafts: Vec<RootDraft>) -> Result<Config, String> {
             .map(|error| error.to_string())
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(format!("validation failed, no changes were made: {message}"));
+        return Err(format!(
+            "validation failed, no changes were made: {message}"
+        ));
     }
 
     let mut roots = Vec::with_capacity(drafts.len());
@@ -325,7 +349,8 @@ pub fn save_config(drafts: Vec<RootDraft>) -> Result<Config, String> {
 }
 
 fn write_config(config: &Config) -> Result<(), String> {
-    let path = config_path().ok_or_else(|| "could not resolve a home directory for the config file".to_string())?;
+    let path = config_path()
+        .ok_or_else(|| "could not resolve a home directory for the config file".to_string())?;
     let parent = path.parent().expect("config path always has a parent");
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
 
@@ -555,7 +580,10 @@ pub(crate) mod tests {
     #[test]
     fn find_root_path_errors_on_unknown_id() {
         with_xdg_config_home(|_| {
-            let config = Config { version: 1, roots: vec![] };
+            let config = Config {
+                version: 1,
+                roots: vec![],
+            };
             write_config(&config).unwrap();
 
             assert!(find_root_path("nonexistent").is_err());
@@ -580,7 +608,11 @@ pub(crate) mod tests {
             let resolved = resolve_path_in_root("01AAA", "folder/note.md").unwrap();
             assert_eq!(
                 resolved,
-                root_dir.path().canonicalize().unwrap().join("folder/note.md")
+                root_dir
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .join("folder/note.md")
             );
         });
     }

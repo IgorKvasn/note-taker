@@ -115,7 +115,12 @@ fn delete_item(app: AppHandle, root_id: String, path: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn move_item(app: AppHandle, root_id: String, from_path: String, to_path: String) -> Result<(), String> {
+fn move_item(
+    app: AppHandle,
+    root_id: String,
+    from_path: String,
+    to_path: String,
+) -> Result<(), String> {
     let root_path = config::find_root_path(&root_id)?;
     let from = config::resolve_path_in_root(&root_id, &from_path)?;
     let to = config::resolve_path_in_root(&root_id, &to_path)?;
@@ -150,7 +155,13 @@ fn mark_resolved(app: AppHandle, root_id: String, path: String) -> Result<(), St
     let absolute_path = config::resolve_path_in_root(&root_id, &path)?;
     let repo_path = Path::new(&root.path);
 
-    let outcome = sync::mark_resolved(repo_path, &path, &absolute_path, root.auto_sync, &root.remote_url)?;
+    let outcome = sync::mark_resolved(
+        repo_path,
+        &path,
+        &absolute_path,
+        root.auto_sync,
+        &root.remote_url,
+    )?;
 
     let manager = app.state::<Arc<SyncManager>>();
     manager.record_state(&root_id, outcome.sync_state.clone());
@@ -313,8 +324,8 @@ mod tests {
 
     #[test]
     fn tauri_config_declares_no_version_key() {
-        let config: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid tauri.conf.json");
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("valid tauri.conf.json");
 
         assert!(
             config.get("version").is_none(),
@@ -327,8 +338,8 @@ mod tests {
         // The bundler injects only the webkit/gtk pair below; everything else we need
         // must be declared here or it is missing from `Depends:` entirely, producing a
         // .deb that installs and then fails at launch.
-        let config: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid tauri.conf.json");
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("valid tauri.conf.json");
         let depends = config["bundle"]["linux"]["deb"]["depends"]
             .as_array()
             .expect("deb bundle declares a depends array");

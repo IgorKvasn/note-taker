@@ -79,7 +79,8 @@ pub fn get_state() -> UiState {
 }
 
 pub fn save_state(state: &UiState) -> Result<(), String> {
-    let path = state_path().ok_or_else(|| "could not resolve a home directory for the state file".to_string())?;
+    let path = state_path()
+        .ok_or_else(|| "could not resolve a home directory for the state file".to_string())?;
     let parent = path.parent().expect("state path always has a parent");
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
 

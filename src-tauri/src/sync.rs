@@ -83,7 +83,10 @@ impl SyncManager {
     }
 
     pub fn record_state(&self, root_id: &str, state: SyncState) {
-        self.last_known_state.lock().unwrap().insert(root_id.to_string(), state);
+        self.last_known_state
+            .lock()
+            .unwrap()
+            .insert(root_id.to_string(), state);
     }
 }
 
@@ -122,7 +125,10 @@ pub fn trigger_sync(app: AppHandle, manager: Arc<SyncManager>, root: RootConfig)
 }
 
 pub fn emit_status(app: &AppHandle, root_id: &str, state: SyncState) {
-    let event = SyncStatusEvent { root_id: root_id.to_string(), state };
+    let event = SyncStatusEvent {
+        root_id: root_id.to_string(),
+        state,
+    };
     if let Err(error) = app.emit(EVENT_SYNC_STATUS, &event) {
         eprintln!("failed to emit {EVENT_SYNC_STATUS}: {error}");
     }
@@ -174,9 +180,9 @@ fn resolve_after_push_rejection(repo_path: &Path, push_stderr: &str) -> SyncStat
             Err(stderr) => SyncState::Error { stderr },
         },
         Err(MergeError::Conflict) => SyncState::Conflict,
-        Err(MergeError::Failed(stderr)) => {
-            SyncState::Error { stderr: format!("push rejected: {push_stderr}\nmerge failed: {stderr}") }
-        }
+        Err(MergeError::Failed(stderr)) => SyncState::Error {
+            stderr: format!("push rejected: {push_stderr}\nmerge failed: {stderr}"),
+        },
     }
 }
 
@@ -192,8 +198,8 @@ enum CommitError {
 }
 
 fn git_commit(repo_path: &Path) -> Result<(), CommitError> {
-    let output = run_git(repo_path, &["commit", "-m", "note-taker sync"])
-        .map_err(CommitError::Failed)?;
+    let output =
+        run_git(repo_path, &["commit", "-m", "note-taker sync"]).map_err(CommitError::Failed)?;
 
     if output.status.success() {
         return Ok(());
@@ -285,7 +291,9 @@ pub fn mark_resolved(
     if !conflicted_relative_paths(repo_path).is_empty() {
         // Other conflicted files remain -- nothing more to do until each of
         // them gets its own `mark_resolved`.
-        return Ok(MarkResolvedOutcome { sync_state: SyncState::Conflict });
+        return Ok(MarkResolvedOutcome {
+            sync_state: SyncState::Conflict,
+        });
     }
 
     // This was the last conflicted file: finish the merge with a commit (no
@@ -294,7 +302,9 @@ pub fn mark_resolved(
     run_git_expecting_success(repo_path, &["commit", "--no-edit"])?;
 
     if !auto_sync || remote_url.is_empty() {
-        return Ok(MarkResolvedOutcome { sync_state: SyncState::LocalOnly });
+        return Ok(MarkResolvedOutcome {
+            sync_state: SyncState::LocalOnly,
+        });
     }
 
     let sync_state = match git_push(repo_path) {
@@ -323,7 +333,13 @@ pub fn conflicted_relative_paths(repo_path: &Path) -> Vec<String> {
     // Unicode, see `notes.rs`) as literal UTF-8 instead of octal-escaped C-style quoting.
     let output = match run_git(
         repo_path,
-        &["-c", "core.quotepath=false", "diff", "--name-only", "--diff-filter=U"],
+        &[
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--name-only",
+            "--diff-filter=U",
+        ],
     ) {
         Ok(output) => output,
         Err(_) => return Vec::new(),
@@ -344,7 +360,10 @@ pub fn root_status(repo_path: &Path, last_known_state: Option<SyncState>) -> Roo
         last_known_state.unwrap_or(SyncState::LocalOnly)
     };
 
-    RootStatus { conflicted_paths, sync_state }
+    RootStatus {
+        conflicted_paths,
+        sync_state,
+    }
 }
 
 #[cfg(test)]
@@ -413,14 +432,31 @@ mod tests {
 
         let dir = TempDir::new().unwrap();
         init_repo(dir.path());
-        run_git(dir.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]).unwrap();
+        run_git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
         write_and_stage(dir.path(), "note.md", "hello\n");
 
         // `git push` needs an upstream on the first push from a fresh repo.
         run_git(dir.path(), &["add", "-A"]).unwrap();
         run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
-        let push = run_git(dir.path(), &["push", "-u", "origin", "HEAD:refs/heads/main"]).unwrap();
-        assert!(push.status.success(), "seed push failed: {}", stderr_of(&push));
+        let push = run_git(
+            dir.path(),
+            &["push", "-u", "origin", "HEAD:refs/heads/main"],
+        )
+        .unwrap();
+        assert!(
+            push.status.success(),
+            "seed push failed: {}",
+            stderr_of(&push)
+        );
 
         write_and_stage(dir.path(), "note2.md", "more\n");
         let state = sync_once(dir.path(), true, remote_dir.path().to_str().unwrap());
@@ -437,16 +473,33 @@ mod tests {
         let clone_a = TempDir::new().unwrap();
         run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
-        run_git(clone_a.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]).unwrap();
+        run_git(
+            clone_a.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
         write_and_stage(clone_a.path(), "shared.md", "base\n");
         run_git(clone_a.path(), &["add", "-A"]).unwrap();
         run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
-        run_git(clone_a.path(), &["push", "-u", "origin", "HEAD:refs/heads/main"]).unwrap();
+        run_git(
+            clone_a.path(),
+            &["push", "-u", "origin", "HEAD:refs/heads/main"],
+        )
+        .unwrap();
 
         // Clone B clones the same history, then diverges with its own file.
         let clone_b = TempDir::new().unwrap();
         let clone = Command::new("git")
-            .args(["clone", remote_dir.path().to_str().unwrap(), clone_b.path().to_str().unwrap()])
+            .args([
+                "clone",
+                remote_dir.path().to_str().unwrap(),
+                clone_b.path().to_str().unwrap(),
+            ])
             .output()
             .unwrap();
         assert!(clone.status.success());
@@ -466,7 +519,10 @@ mod tests {
         let state = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
 
         assert_eq!(state, SyncState::Synced);
-        assert!(clone_b.path().join("a-only.md").exists(), "merge should have pulled in a's file");
+        assert!(
+            clone_b.path().join("a-only.md").exists(),
+            "merge should have pulled in a's file"
+        );
     }
 
     #[test]
@@ -477,15 +533,32 @@ mod tests {
         let clone_a = TempDir::new().unwrap();
         run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
-        run_git(clone_a.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]).unwrap();
+        run_git(
+            clone_a.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
         write_and_stage(clone_a.path(), "shared.md", "base\n");
         run_git(clone_a.path(), &["add", "-A"]).unwrap();
         run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
-        run_git(clone_a.path(), &["push", "-u", "origin", "HEAD:refs/heads/main"]).unwrap();
+        run_git(
+            clone_a.path(),
+            &["push", "-u", "origin", "HEAD:refs/heads/main"],
+        )
+        .unwrap();
 
         let clone_b = TempDir::new().unwrap();
         let clone = Command::new("git")
-            .args(["clone", remote_dir.path().to_str().unwrap(), clone_b.path().to_str().unwrap()])
+            .args([
+                "clone",
+                remote_dir.path().to_str().unwrap(),
+                clone_b.path().to_str().unwrap(),
+            ])
             .output()
             .unwrap();
         assert!(clone.status.success());
@@ -517,14 +590,31 @@ mod tests {
         let clone_a = TempDir::new().unwrap();
         run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
-        run_git(clone_a.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]).unwrap();
+        run_git(
+            clone_a.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
         write_and_stage(clone_a.path(), "shared.md", "base\n");
         run_git(clone_a.path(), &["add", "-A"]).unwrap();
         run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
-        run_git(clone_a.path(), &["push", "-u", "origin", "HEAD:refs/heads/main"]).unwrap();
+        run_git(
+            clone_a.path(),
+            &["push", "-u", "origin", "HEAD:refs/heads/main"],
+        )
+        .unwrap();
 
         let clone = Command::new("git")
-            .args(["clone", remote_dir.path().to_str().unwrap(), dir.to_str().unwrap()])
+            .args([
+                "clone",
+                remote_dir.path().to_str().unwrap(),
+                dir.to_str().unwrap(),
+            ])
             .output()
             .unwrap();
         assert!(clone.status.success());
@@ -587,12 +677,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         seed_a_real_merge_conflict(dir.path());
         let absolute_path = dir.path().join("shared.md");
-        assert!(fs::read_to_string(&absolute_path).unwrap().contains("<<<<<<<"));
+        assert!(fs::read_to_string(&absolute_path)
+            .unwrap()
+            .contains("<<<<<<<"));
 
         let result = mark_resolved(dir.path(), "shared.md", &absolute_path, false, "");
 
         assert!(result.is_err());
-        assert!(is_merge_in_progress(dir.path()), "a rejected mark_resolved must not touch the merge state");
+        assert!(
+            is_merge_in_progress(dir.path()),
+            "a rejected mark_resolved must not touch the merge state"
+        );
         assert_eq!(
             conflicted_relative_paths(dir.path()),
             vec!["shared.md".to_string()],
@@ -610,7 +705,10 @@ mod tests {
         let outcome = mark_resolved(dir.path(), "shared.md", &absolute_path, false, "").unwrap();
 
         assert_eq!(outcome.sync_state, SyncState::LocalOnly);
-        assert!(!is_merge_in_progress(dir.path()), "clearing the last conflicted file must finish the merge");
+        assert!(
+            !is_merge_in_progress(dir.path()),
+            "clearing the last conflicted file must finish the merge"
+        );
         let log = run_git(dir.path(), &["log", "--oneline", "-1"]).unwrap();
         assert!(!String::from_utf8_lossy(&log.stdout).is_empty());
     }
@@ -623,16 +721,33 @@ mod tests {
         let clone_a = TempDir::new().unwrap();
         run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
-        run_git(clone_a.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]).unwrap();
+        run_git(
+            clone_a.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
         write_and_stage(clone_a.path(), "first.md", "base\n");
         write_and_stage(clone_a.path(), "second.md", "base\n");
         run_git(clone_a.path(), &["add", "-A"]).unwrap();
         run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
-        run_git(clone_a.path(), &["push", "-u", "origin", "HEAD:refs/heads/main"]).unwrap();
+        run_git(
+            clone_a.path(),
+            &["push", "-u", "origin", "HEAD:refs/heads/main"],
+        )
+        .unwrap();
 
         let clone_b = TempDir::new().unwrap();
         let clone = Command::new("git")
-            .args(["clone", remote_dir.path().to_str().unwrap(), clone_b.path().to_str().unwrap()])
+            .args([
+                "clone",
+                remote_dir.path().to_str().unwrap(),
+                clone_b.path().to_str().unwrap(),
+            ])
             .output()
             .unwrap();
         assert!(clone.status.success());
@@ -656,11 +771,18 @@ mod tests {
         let first_absolute = clone_b.path().join("first.md");
         fs::write(&first_absolute, "base, resolved by hand\n").unwrap();
 
-        let outcome = mark_resolved(clone_b.path(), "first.md", &first_absolute, false, "").unwrap();
+        let outcome =
+            mark_resolved(clone_b.path(), "first.md", &first_absolute, false, "").unwrap();
 
         assert_eq!(outcome.sync_state, SyncState::Conflict);
-        assert!(is_merge_in_progress(clone_b.path()), "second.md is still conflicted -- merge must stay open");
-        assert_eq!(conflicted_relative_paths(clone_b.path()), vec!["second.md".to_string()]);
+        assert!(
+            is_merge_in_progress(clone_b.path()),
+            "second.md is still conflicted -- merge must stay open"
+        );
+        assert_eq!(
+            conflicted_relative_paths(clone_b.path()),
+            vec!["second.md".to_string()]
+        );
     }
 
     #[test]
@@ -671,15 +793,32 @@ mod tests {
         let clone_a = TempDir::new().unwrap();
         run_git(clone_a.path(), &["init"]).unwrap();
         init_repo(clone_a.path());
-        run_git(clone_a.path(), &["remote", "add", "origin", remote_dir.path().to_str().unwrap()]).unwrap();
+        run_git(
+            clone_a.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
         write_and_stage(clone_a.path(), "shared.md", "base\n");
         run_git(clone_a.path(), &["add", "-A"]).unwrap();
         run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
-        run_git(clone_a.path(), &["push", "-u", "origin", "HEAD:refs/heads/main"]).unwrap();
+        run_git(
+            clone_a.path(),
+            &["push", "-u", "origin", "HEAD:refs/heads/main"],
+        )
+        .unwrap();
 
         let clone_b = TempDir::new().unwrap();
         let clone = Command::new("git")
-            .args(["clone", remote_dir.path().to_str().unwrap(), clone_b.path().to_str().unwrap()])
+            .args([
+                "clone",
+                remote_dir.path().to_str().unwrap(),
+                clone_b.path().to_str().unwrap(),
+            ])
             .output()
             .unwrap();
         assert!(clone.status.success());
@@ -735,10 +874,16 @@ mod tests {
             *pending = false;
             was_pending
         };
-        assert!(pending, "expected the trailing trigger to be coalesced as one pending pass");
+        assert!(
+            pending,
+            "expected the trailing trigger to be coalesced as one pending pass"
+        );
 
         busy = slot.busy.lock().unwrap();
-        assert!(*busy, "busy should still be true until the coalesced pass also completes");
+        assert!(
+            *busy,
+            "busy should still be true until the coalesced pass also completes"
+        );
     }
 
     #[test]
@@ -749,7 +894,10 @@ mod tests {
 
         *slot_a.busy.lock().unwrap() = true;
 
-        assert!(!*slot_b.busy.lock().unwrap(), "a different root's slot must be unaffected");
+        assert!(
+            !*slot_b.busy.lock().unwrap(),
+            "a different root's slot must be unaffected"
+        );
     }
 
     #[test]
@@ -773,7 +921,10 @@ mod tests {
         thread::sleep(Duration::from_millis(1));
         assert_eq!(counter.load(Ordering::SeqCst), 8);
         for slot in &slots[1..] {
-            assert!(Arc::ptr_eq(&slots[0], slot), "all callers must get the same slot for one root id");
+            assert!(
+                Arc::ptr_eq(&slots[0], slot),
+                "all callers must get the same slot for one root id"
+            );
         }
     }
 }

@@ -63,14 +63,18 @@ fn find_matches(haystack: &str, query_lower: &str) -> Vec<MatchRange> {
 /// The first non-blank line of a note body, shown unhighlighted for a
 /// title-only hit.
 fn first_content_line(body: &str) -> &str {
-    body.lines().find(|line| !line.trim().is_empty()).unwrap_or("")
+    body.lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
 }
 
 /// The line containing `body_offset` (a body-relative character offset),
 /// along with that offset translated to be relative to the returned line.
 fn line_containing(body: &str, body_offset: usize) -> (&str, usize) {
     let line_start = body[..body_offset].rfind('\n').map_or(0, |index| index + 1);
-    let line_end = body[body_offset..].find('\n').map_or(body.len(), |index| body_offset + index);
+    let line_end = body[body_offset..]
+        .find('\n')
+        .map_or(body.len(), |index| body_offset + index);
     (&body[line_start..line_end], body_offset - line_start)
 }
 
@@ -166,13 +170,20 @@ fn search_root(root_id: &str, root_path: &Path, query_lower: &str, seq: u64) -> 
     files
         .into_iter()
         .filter_map(|absolute_path| {
-            let relative_path = absolute_path.strip_prefix(root_path).ok()?.to_string_lossy().replace('\\', "/");
+            let relative_path = absolute_path
+                .strip_prefix(root_path)
+                .ok()?
+                .to_string_lossy()
+                .replace('\\', "/");
             let raw = fs::read_to_string(&absolute_path).ok()?;
             let body = strip_frontmatter(&raw);
             let title = absolute_path.file_stem()?.to_string_lossy().into_owned();
 
             let found = search_note(&title, body, query_lower)?;
-            let directory_path = relative_path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string();
+            let directory_path = relative_path
+                .rsplit_once('/')
+                .map_or("", |(dir, _)| dir)
+                .to_string();
 
             Some(SearchResult {
                 root_id: root_id.to_string(),
@@ -202,7 +213,11 @@ pub fn search_notes(query: &str, seq: u64, roots: &[(String, PathBuf)]) -> Vec<S
         .flat_map(|(root_id, root_path)| search_root(root_id, root_path, &query_lower, seq))
         .collect();
 
-    results.sort_by(|a, b| b.match_count.cmp(&a.match_count).then_with(|| a.title.cmp(&b.title)));
+    results.sort_by(|a, b| {
+        b.match_count
+            .cmp(&a.match_count)
+            .then_with(|| a.title.cmp(&b.title))
+    });
     results
 }
 
@@ -248,7 +263,12 @@ mod tests {
 
     #[test]
     fn search_note_title_only_hit_returns_first_content_line_unhighlighted() {
-        let found = search_note("docker notes", "\n  \nfirst real line\nsecond line", "docker").unwrap();
+        let found = search_note(
+            "docker notes",
+            "\n  \nfirst real line\nsecond line",
+            "docker",
+        )
+        .unwrap();
         assert_eq!(found.match_count, 1);
         assert_eq!(found.snippet, "first real line");
         assert!(found.snippet_matches.is_empty());
@@ -256,14 +276,27 @@ mod tests {
 
     #[test]
     fn search_note_body_match_snippet_highlights_the_matching_line() {
-        let found = search_note("title", "first line\nhas docker compose here\nthird", "docker compose").unwrap();
+        let found = search_note(
+            "title",
+            "first line\nhas docker compose here\nthird",
+            "docker compose",
+        )
+        .unwrap();
         assert_eq!(found.snippet, "has docker compose here");
-        assert_eq!(found.snippet_matches, vec![MatchRange { start: 4, end: 18 }]);
+        assert_eq!(
+            found.snippet_matches,
+            vec![MatchRange { start: 4, end: 18 }]
+        );
     }
 
     #[test]
     fn search_note_first_match_offset_is_relative_to_the_full_body_not_the_snippet() {
-        let found = search_note("title", "first line\nhas docker compose here\nthird", "docker compose").unwrap();
+        let found = search_note(
+            "title",
+            "first line\nhas docker compose here\nthird",
+            "docker compose",
+        )
+        .unwrap();
         // "docker compose" starts at index 4 of the second line, and the second
         // line starts at body index 11 ("first line\n" is 11 chars).
         assert_eq!(found.first_match_offset, Some(15));
@@ -283,10 +316,17 @@ mod tests {
     #[test]
     fn search_root_excludes_frontmatter_from_matching_and_snippets() {
         let dir = TempDir::new().unwrap();
-        write_note(dir.path(), "note.md", "---\nid: 01J8XULIDVALUE\n---\nplain body content\n");
+        write_note(
+            dir.path(),
+            "note.md",
+            "---\nid: 01J8XULIDVALUE\n---\nplain body content\n",
+        );
 
         let results = search_root("root-1", dir.path(), "01j8xulidvalue", 0);
-        assert!(results.is_empty(), "a frontmatter ULID must not be findable");
+        assert!(
+            results.is_empty(),
+            "a frontmatter ULID must not be findable"
+        );
 
         let results = search_root("root-1", dir.path(), "plain body", 0);
         assert_eq!(results.len(), 1);
@@ -296,16 +336,27 @@ mod tests {
     #[test]
     fn search_root_finds_raw_markdown_syntax() {
         let dir = TempDir::new().unwrap();
-        write_note(dir.path(), "note.md", "---\nid: 1\n---\nsee **bold** and [link](http://example.com/path)\n");
+        write_note(
+            dir.path(),
+            "note.md",
+            "---\nid: 1\n---\nsee **bold** and [link](http://example.com/path)\n",
+        );
 
         assert_eq!(search_root("root-1", dir.path(), "**bold**", 0).len(), 1);
-        assert_eq!(search_root("root-1", dir.path(), "example.com/path", 0).len(), 1);
+        assert_eq!(
+            search_root("root-1", dir.path(), "example.com/path", 0).len(),
+            1
+        );
     }
 
     #[test]
     fn search_root_searches_titles_but_not_directory_names() {
         let dir = TempDir::new().unwrap();
-        write_note(dir.path(), "keyword-folder/note.md", "---\nid: 1\n---\nirrelevant\n");
+        write_note(
+            dir.path(),
+            "keyword-folder/note.md",
+            "---\nid: 1\n---\nirrelevant\n",
+        );
         write_note(dir.path(), "keyword.md", "---\nid: 2\n---\nirrelevant\n");
 
         let results = search_root("root-1", dir.path(), "keyword", 0);
@@ -317,31 +368,51 @@ mod tests {
     #[test]
     fn search_root_skips_git_directory_dotfiles_and_symlinks() {
         let dir = TempDir::new().unwrap();
-        write_note(dir.path(), ".git/some-object.md", "---\nid: 1\n---\nneedle\n");
+        write_note(
+            dir.path(),
+            ".git/some-object.md",
+            "---\nid: 1\n---\nneedle\n",
+        );
         write_note(dir.path(), ".trash/note.md", "---\nid: 2\n---\nneedle\n");
         write_note(dir.path(), "visible.md", "---\nid: 3\n---\nneedle\n");
 
         #[cfg(unix)]
         {
             write_note(dir.path(), "real-target.md", "---\nid: 4\n---\nneedle\n");
-            std::os::unix::fs::symlink(dir.path().join("real-target.md"), dir.path().join("link.md")).unwrap();
+            std::os::unix::fs::symlink(
+                dir.path().join("real-target.md"),
+                dir.path().join("link.md"),
+            )
+            .unwrap();
         }
 
         let results = search_root("root-1", dir.path(), "needle", 0);
 
         let titles: Vec<&str> = results.iter().map(|r| r.title.as_str()).collect();
         assert!(titles.contains(&"visible.md".trim_end_matches(".md")));
-        assert_eq!(results.len(), if cfg!(unix) { 2 } else { 1 }, "only visible.md and real-target.md should be found");
+        assert_eq!(
+            results.len(),
+            if cfg!(unix) { 2 } else { 1 },
+            "only visible.md and real-target.md should be found"
+        );
     }
 
     #[test]
     fn search_notes_orders_by_match_count_descending_then_title_alphabetical() {
         let dir = TempDir::new().unwrap();
-        write_note(dir.path(), "zebra.md", "---\nid: 1\n---\nneedle needle needle\n");
+        write_note(
+            dir.path(),
+            "zebra.md",
+            "---\nid: 1\n---\nneedle needle needle\n",
+        );
         write_note(dir.path(), "apple.md", "---\nid: 2\n---\nneedle\n");
         write_note(dir.path(), "banana.md", "---\nid: 3\n---\nneedle needle\n");
 
-        let results = search_notes("needle", 0, &[("root-1".to_string(), dir.path().to_path_buf())]);
+        let results = search_notes(
+            "needle",
+            0,
+            &[("root-1".to_string(), dir.path().to_path_buf())],
+        );
 
         let titles: Vec<&str> = results.iter().map(|r| r.title.as_str()).collect();
         assert_eq!(titles, vec!["zebra", "banana", "apple"]);
@@ -353,7 +424,11 @@ mod tests {
         write_note(dir.path(), "zebra.md", "---\nid: 1\n---\nneedle\n");
         write_note(dir.path(), "apple.md", "---\nid: 2\n---\nneedle\n");
 
-        let results = search_notes("needle", 0, &[("root-1".to_string(), dir.path().to_path_buf())]);
+        let results = search_notes(
+            "needle",
+            0,
+            &[("root-1".to_string(), dir.path().to_path_buf())],
+        );
 
         let titles: Vec<&str> = results.iter().map(|r| r.title.as_str()).collect();
         assert_eq!(titles, vec!["apple", "zebra"]);
@@ -364,7 +439,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_note(dir.path(), "note.md", "---\nid: 1\n---\nneedle\n");
 
-        let results = search_notes("needle", 42, &[("root-1".to_string(), dir.path().to_path_buf())]);
+        let results = search_notes(
+            "needle",
+            42,
+            &[("root-1".to_string(), dir.path().to_path_buf())],
+        );
 
         assert_eq!(results[0].seq, 42);
     }
