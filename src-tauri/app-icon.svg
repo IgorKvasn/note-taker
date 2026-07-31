@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="spine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+  </defs>
+  <!-- Shadow is a static offset shape, not an feDropShadow filter: librsvg and
+       ImageMagick drop or displace SVG filters, and this file is rasterized by
+       whatever toolchain packages the icon. -->
+  <g fill="#0f172a" opacity="0.22">
+    <path d="M100 36h92a32 32 0 0 1 32 32v136a32 32 0 0 1-32 32h-92z"/>
+    <path d="M56 36h44v200H56a24 24 0 0 1-24-24V60a24 24 0 0 1 24-24z"/>
+  </g>
+  <path d="M100 28h92a32 32 0 0 1 32 32v136a32 32 0 0 1-32 32h-92z" fill="#f8fafc"/>
+  <path d="M56 28h44v200H56a24 24 0 0 1-24-24V52a24 24 0 0 1 24-24z" fill="url(#spine)"/>
+  <g stroke="#94a3b8" stroke-width="14" stroke-linecap="round">
+    <path d="M128 92h68"/>
+    <path d="M128 128h68"/>
+    <path d="M128 164h40"/>
+  </g>
+  <g fill="#e0e7ff">
+    <circle cx="66" cy="84" r="11"/>
+    <circle cx="66" cy="128" r="11"/>
+    <circle cx="66" cy="172" r="11"/>
+  </g>
+</svg>
