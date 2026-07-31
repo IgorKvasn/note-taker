@@ -48,3 +48,38 @@ The version lives in `src-tauri/Cargo.toml` only and is deliberately omitted fro
 `tauri.conf.json`. Ship plain `MAJOR.MINOR.PATCH` versions — Debian reads the
 hyphen in `1.0.0-beta.1` as a `debian_revision` and sorts it *newer* than
 `1.0.0`, inverted from semver.
+
+## Releasing
+
+```bash
+./scripts/release.sh          # interactive release
+./scripts/release.sh --dry-run  # preview without making changes
+```
+
+This takes `main` from "commits since the last release" to a published GitHub
+release with the `.deb` attached, in one run:
+
+1. Finds the last `vMAJOR.MINOR.PATCH` tag (or treats all commits as the
+   release contents if there is none yet), lists the commits since then, and
+   proposes the next version from their [Conventional Commits](https://www.conventionalcommits.org/)
+   subjects: a breaking change (`!` or a `BREAKING CHANGE:` footer) proposes a
+   major bump but always asks rather than assuming `1.0.0`; `feat` proposes a
+   minor bump; anything else proposes a patch bump. This mapping applies as-is
+   even at `0.x` — a `feat` still bumps the minor, it does not shift down to a
+   patch.
+2. Asks for confirmation (or a different version) before changing anything.
+   Requires an interactive terminal — it will not guess a version
+   non-interactively.
+3. On confirmation, writes the version to `src-tauri/Cargo.toml`, refreshes
+   `src-tauri/Cargo.lock`, and commits the bump.
+4. Builds the `.deb` via `scripts/build-deb.sh`. A failed build reverts the
+   version-bump commit and stops — no tag or release is created.
+5. Tags the bump commit `vMAJOR.MINOR.PATCH`, pushes the commit and tag, and
+   creates the GitHub release with the `.deb` attached and the commit list as
+   release notes.
+
+Preflight checks (clean working tree, on `main`, up to date with `origin`,
+`gh` authenticated) run before anything else, and the script must be run on
+Ubuntu 26.04 since it builds through `build-deb.sh`. If a later step fails
+(push, tag push, release creation), the script leaves the commit/tag state as
+found and prints exactly what happened and how to recover.
