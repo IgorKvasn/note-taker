@@ -10,6 +10,7 @@
   --text-muted: #64748b;
   --focus-ring-color: #4f46e5;
   --danger-color: #dc2626;
+  --link-color: #1d4ed8;
 
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
@@ -31,6 +32,7 @@
     --text-muted: #94a3b8;
     --focus-ring-color: #818cf8;
     --danger-color: #f87171;
+    --link-color: #7dd3fc;
   }
 }
 

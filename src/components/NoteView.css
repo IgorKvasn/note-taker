@@ -10,6 +10,11 @@
   border-collapse: collapse;
 }
 
+.note-view a,
+.note-view a:visited {
+  color: var(--link-color);
+}
+
 .note-view th,
 .note-view td {
   border: 1px solid var(--border-color);
