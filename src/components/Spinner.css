@@ -43,23 +43,10 @@
 
 /* The global reduced-motion catch-all in styles.css forces every animation to
  * a single iteration, which would freeze the rotating ring mid-turn -- so
- * under reduced motion, hide the ring and use a fading label as the
- * still-meaningful, non-disorienting loading cue instead. */
+ * under reduced motion, hide the ring and fall back to a plain static label
+ * as the still-meaningful, non-disorienting loading cue instead. */
 @media (prefers-reduced-motion: reduce) {
   .spinner__ring {
     display: none;
-  }
-
-  .spinner__label {
-    animation: spinner-fade var(--motion-slow) ease-in-out infinite alternate;
-  }
-}
-
-@keyframes spinner-fade {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0.4;
   }
 }
