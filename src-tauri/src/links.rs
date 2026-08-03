@@ -32,9 +32,9 @@ pub struct LinkedNote {
 }
 
 /// `notes` resolves a `note:` ULID to a path; `backlinks` maps a target ULID to
-/// the paths of the notes linking to it. The backlink map is built here but not
-/// yet consumed -- the follow-up "notes linking here" feature is frontend-only
-/// by design.
+/// the paths of the notes linking to it. Both are built in this one traversal;
+/// the frontend's "Linked from" section (issue #50) reads `backlinks` from the
+/// same cached scan `notes` already powers, needing no second command.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ScanLinksResult {
     pub notes: Vec<LinkedNote>,

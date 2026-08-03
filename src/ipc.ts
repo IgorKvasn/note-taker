@@ -114,8 +114,8 @@ export interface LinkedNote {
 
 /**
  * Mirrors `ScanLinksResult` in `src-tauri/src/links.rs`. `backlinks` maps a
- * target note's ULID to the paths linking to it; it is populated by the backend
- * but not yet read anywhere on this side.
+ * target note's ULID to the paths linking to it; consumed by `useNoteLinks`'
+ * `getBacklinks` for the "Linked from" section (issue #50).
  */
 export interface ScanLinksResult {
   notes: LinkedNote[];

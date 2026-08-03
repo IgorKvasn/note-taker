@@ -18,6 +18,7 @@ import { markdownLivePreview } from "./markdownLivePreview";
 import { noteEditorKeymap } from "./noteEditorKeymap";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteView } from "./NoteView";
+import { BacklinksSection } from "./BacklinksSection";
 import { useNoteLinks } from "../hooks/useNoteLinks";
 import "./NoteEditor.css";
 
@@ -90,7 +91,7 @@ export function NoteEditor({
   scrollToOffset,
   onOpenNoteLink,
 }: NoteEditorProps) {
-  const { linkableNotes, resolveNoteLink } = useNoteLinks(rootId);
+  const { linkableNotes, resolveNoteLink, getBacklinks } = useNoteLinks(rootId);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -115,6 +116,9 @@ export function NoteEditor({
   const [isConflicted, setIsConflicted] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // The open note's own frontmatter id (always non-empty -- `open_note`
+  // backfills one), used to look up who links here (issue #50).
+  const [noteId, setNoteId] = useState<string | null>(null);
 
   /** Returns a promise that resolves once any pending autosave has been sent
    * (and settled) -- callers that need the disk write to land first (e.g.
@@ -210,6 +214,7 @@ export function NoteEditor({
         });
         setContent(result.content);
         setIsConflicted(result.is_conflicted);
+        setNoteId(result.id);
         moveCursorTo(view, scrollToOffsetRef.current);
       })
       .catch(() => {
@@ -287,6 +292,8 @@ export function NoteEditor({
     };
   }, [rootId, path]);
 
+  const backlinkEntries = noteId === null ? [] : getBacklinks(noteId);
+
   const markResolved = useCallback(() => {
     setResolveError(null);
     // The user's hand-edit removing the markers is likely still sitting in
@@ -341,6 +348,9 @@ export function NoteEditor({
           />
         )}
       </div>
+      {backlinkEntries.length > 0 && (
+        <BacklinksSection entries={backlinkEntries} onSelect={(targetPath) => onOpenNoteLink?.(rootId, targetPath)} />
+      )}
     </div>
   );
 }

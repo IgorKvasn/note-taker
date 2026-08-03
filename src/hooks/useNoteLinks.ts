@@ -12,6 +12,15 @@ import {
 /** Shared so `linkableNotes` keeps one identity across renders with no scan yet. */
 const EMPTY_NOTES: LinkedNote[] = [];
 
+/** One row in a "Linked from" section (issue #50): the linking note's own
+ * title/directory_path, not the target's -- these describe where the link
+ * lives, so a reader can tell the notes apart before opening one. */
+export interface BacklinkEntry {
+  path: string;
+  title: string;
+  directory_path: string;
+}
+
 /**
  * Caches one root's `note:` link map, re-scanning when a sync settles.
  *
@@ -81,5 +90,40 @@ export function useNoteLinks(rootId: string) {
 
   const resolveNoteLink = useCallback((id: string) => pathsById.get(id) ?? null, [pathsById]);
 
-  return { linkableNotes: notes, resolveNoteLink };
+  const backlinks = useMemo(
+    () => (scanned?.rootId === rootId ? scanned.result.backlinks : {}),
+    [scanned, rootId],
+  );
+
+  const noteByPath = useMemo(() => {
+    const map = new Map<string, LinkedNote>();
+    for (const note of notes) {
+      map.set(note.path, note);
+    }
+    return map;
+  }, [notes]);
+
+  /** Resolves a target note's ULID to the notes linking to it, one row per
+   * linking note (spec-mirrored: `search.rs:18`). Sorted by title then path --
+   * the same criteria `scan_links` itself sorts `notes` by -- so the list order
+   * is stable between scans of an unchanged root. A linking path with no entry
+   * in `notes` (its own frontmatter has no id yet) is omitted -- there is
+   * nothing to show a title for. */
+  const getBacklinks = useCallback(
+    (noteId: string): BacklinkEntry[] => {
+      const paths = backlinks[noteId] ?? [];
+      const entries: BacklinkEntry[] = [];
+      for (const path of paths) {
+        const note = noteByPath.get(path);
+        if (note !== undefined) {
+          entries.push({ path: note.path, title: note.title, directory_path: note.directory_path });
+        }
+      }
+      entries.sort((a, b) => a.title.localeCompare(b.title) || a.path.localeCompare(b.path));
+      return entries;
+    },
+    [backlinks, noteByPath],
+  );
+
+  return { linkableNotes: notes, resolveNoteLink, getBacklinks };
 }

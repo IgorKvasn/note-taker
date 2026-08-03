@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NoteEditor } from "./NoteEditor";
-import type { EditorMode, SyncStatusEvent } from "../ipc";
+import type { EditorMode, ScanLinksResult, SyncStatusEvent } from "../ipc";
 
 const invoke = vi.hoisted(() => vi.fn());
 const listen = vi.hoisted(() => vi.fn());
@@ -547,6 +547,110 @@ describe("NoteEditor", () => {
       const markResolvedCallOrder = invoke.mock.calls.findIndex((call) => call[0] === "mark_resolved");
       expect(saveCallOrder).toBeGreaterThanOrEqual(0);
       expect(markResolvedCallOrder).toBeGreaterThan(saveCallOrder);
+    });
+  });
+
+  describe("backlinks (issue #50)", () => {
+    function mockScanLinks(scanLinks: Record<string, unknown>) {
+      mockInvoke({ scan_links: scanLinks });
+    }
+
+    it("shows a 'Linked from' section listing the notes that link here", async () => {
+      mockScanLinks({
+        notes: [
+          { id: "01A", path: "a.md", directory_path: "", title: "a" },
+          { id: "01B", path: "folder/b.md", directory_path: "folder", title: "b" },
+        ],
+        backlinks: { "01LOADED": ["a.md", "folder/b.md"] },
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+
+      expect(await screen.findByText("Linked from (2)")).toBeDefined();
+      expect(screen.getByText("a")).toBeDefined();
+      expect(screen.getByText("b")).toBeDefined();
+    });
+
+    it("is entirely absent when no notes link to the open note", async () => {
+      mockScanLinks({ notes: [], backlinks: {} });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+
+      expect(screen.queryByText(/linked from/i)).toBeNull();
+    });
+
+    it("shows exactly one row for a note that links here three times", async () => {
+      mockScanLinks({
+        notes: [{ id: "01A", path: "a.md", directory_path: "", title: "a" }],
+        backlinks: { "01LOADED": ["a.md"] },
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+
+      expect(await screen.findByText("Linked from (1)")).toBeDefined();
+    });
+
+    it("renders in both edit and view mode", async () => {
+      mockScanLinks({
+        notes: [{ id: "01A", path: "a.md", directory_path: "", title: "a" }],
+        backlinks: { "01LOADED": ["a.md"] },
+      });
+      const user = userEvent.setup();
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+      expect(await screen.findByText("Linked from (1)")).toBeDefined();
+
+      await user.click(screen.getByRole("button", { name: /preview/i }));
+
+      expect(screen.getByText("Linked from (1)")).toBeDefined();
+    });
+
+    it("disappears once the last inbound link is gone and the link cache refreshes", async () => {
+      let scanResult: ScanLinksResult = {
+        notes: [{ id: "01A", path: "a.md", directory_path: "", title: "a" }],
+        backlinks: { "01LOADED": ["a.md"] },
+      };
+      invoke.mockImplementation((command: string) => {
+        if (command === "open_note") {
+          return Promise.resolve({ content: "Loaded\n", id: "01LOADED", is_conflicted: false });
+        }
+        if (command === "scan_links") {
+          return Promise.resolve(scanResult);
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+      expect(await screen.findByText("Linked from (1)")).toBeDefined();
+
+      // The linking note edited away its link to this one; the next rescan
+      // (triggered by a settled sync, same as the tree's own refresh) reflects that.
+      scanResult = { notes: [{ id: "01A", path: "a.md", directory_path: "", title: "a" }], backlinks: {} };
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+
+      await waitFor(() => expect(screen.queryByText(/linked from/i)).toBeNull());
+    });
+
+    it("opens the clicked backlink via onOpenNoteLink", async () => {
+      mockScanLinks({
+        notes: [{ id: "01A", path: "folder/a.md", directory_path: "folder", title: "a" }],
+        backlinks: { "01LOADED": ["folder/a.md"] },
+      });
+      const onOpenNoteLink = vi.fn();
+      const user = userEvent.setup();
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" onOpenNoteLink={onOpenNoteLink} />);
+      await screen.findByText("Loaded");
+      await screen.findByText("Linked from (1)");
+
+      await user.click(screen.getByText("a"));
+
+      expect(onOpenNoteLink).toHaveBeenCalledWith("01ROOT", "folder/a.md");
     });
   });
 });

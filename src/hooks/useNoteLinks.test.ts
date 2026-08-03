@@ -124,4 +124,70 @@ describe("useNoteLinks", () => {
 
     expect(scanCount()).toBe(after);
   });
+
+  describe("getBacklinks", () => {
+    it("returns the title and directory_path of each linking note", async () => {
+      invoke.mockResolvedValue({
+        notes: [
+          { id: "01A", path: "a.md", directory_path: "", title: "a" },
+          { id: "01B", path: "folder/b.md", directory_path: "folder", title: "b" },
+        ],
+        backlinks: { "01TARGET": ["a.md", "folder/b.md"] },
+      });
+      const { result } = renderHook(() => useNoteLinks("A"));
+      await waitFor(() => expect(result.current.linkableNotes).toHaveLength(2));
+
+      expect(result.current.getBacklinks("01TARGET")).toEqual([
+        { path: "a.md", title: "a", directory_path: "" },
+        { path: "folder/b.md", title: "b", directory_path: "folder" },
+      ]);
+    });
+
+    it("returns an empty array for a note with no backlinks", async () => {
+      const { result } = renderHook(() => useNoteLinks("A"));
+      await waitFor(() => expect(result.current.linkableNotes).toHaveLength(1));
+
+      expect(result.current.getBacklinks("01NOBODY-LINKS-HERE")).toEqual([]);
+    });
+
+    it("collapses repeated links from the same note into one entry", async () => {
+      invoke.mockResolvedValue({
+        notes: [{ id: "01A", path: "a.md", directory_path: "", title: "a" }],
+        backlinks: { "01TARGET": ["a.md"] },
+      });
+      const { result } = renderHook(() => useNoteLinks("A"));
+      await waitFor(() => expect(result.current.linkableNotes).toHaveLength(1));
+
+      expect(result.current.getBacklinks("01TARGET")).toHaveLength(1);
+    });
+
+    it("omits a linking path whose own note has no frontmatter id yet", async () => {
+      invoke.mockResolvedValue({
+        notes: [],
+        backlinks: { "01TARGET": ["untitled.md"] },
+      });
+      const { result } = renderHook(() => useNoteLinks("A"));
+      await waitFor(() => expect(invoke).toHaveBeenCalled());
+
+      expect(result.current.getBacklinks("01TARGET")).toEqual([]);
+    });
+
+    it("never returns the previous root's backlinks after the root changes", async () => {
+      invoke.mockImplementation((_command: string, args: { rootId: string }) =>
+        Promise.resolve({
+          notes: [{ id: `01${args.rootId}`, path: `${args.rootId}.md`, directory_path: "", title: args.rootId }],
+          backlinks: { "01TARGET": [`${args.rootId}.md`] },
+        }),
+      );
+      const { result, rerender } = renderHook(({ rootId }) => useNoteLinks(rootId), {
+        initialProps: { rootId: "A" },
+      });
+      await waitFor(() => expect(result.current.getBacklinks("01TARGET")).toHaveLength(1));
+
+      invoke.mockImplementation(() => new Promise(() => {}));
+      rerender({ rootId: "B" });
+
+      expect(result.current.getBacklinks("01TARGET")).toEqual([]);
+    });
+  });
 });
