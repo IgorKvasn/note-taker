@@ -16,7 +16,11 @@ export function Toast({ toasts }: ToastProps) {
   return (
     <div className="toast-stack">
       {toasts.map((toast) => (
-        <div key={toast.id} className="toast-stack__toast" role="status">
+        <div
+          key={toast.id}
+          className={toast.isExiting ? "toast-stack__toast toast-stack__toast--closing" : "toast-stack__toast"}
+          role="status"
+        >
           {toast.message}
         </div>
       ))}

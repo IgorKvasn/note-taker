@@ -15,7 +15,16 @@
   background-color: var(--surface-raised);
   box-shadow: 0 12px 28px rgb(15 23 42 / 28%);
   font-size: 0.85rem;
+  opacity: 1;
   animation: toast-in var(--motion-base) var(--ease-out);
+}
+
+/* Timer-driven exit (see useToasts EXIT_DURATION_MS) rather than event-gated, so this only
+ * needs to visually match the removal timing -- no transitionend listener required. */
+.toast-stack__toast--closing {
+  animation: none;
+  transition: opacity var(--motion-base) var(--ease-out);
+  opacity: 0;
 }
 
 @keyframes toast-in {

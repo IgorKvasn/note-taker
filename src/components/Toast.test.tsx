@@ -13,8 +13,8 @@ describe("Toast", () => {
     render(
       <Toast
         toasts={[
-          { id: 1, message: "Copied to clipboard" },
-          { id: 2, message: "Failed to copy" },
+          { id: 1, message: "Copied to clipboard", isExiting: false },
+          { id: 2, message: "Failed to copy", isExiting: false },
         ]}
       />,
     );
@@ -23,5 +23,17 @@ describe("Toast", () => {
     expect(statuses).toHaveLength(2);
     expect(screen.getByText("Copied to clipboard")).toBeDefined();
     expect(screen.getByText("Failed to copy")).toBeDefined();
+  });
+
+  it("applies the closing class to a toast marked isExiting", () => {
+    render(<Toast toasts={[{ id: 1, message: "Copied to clipboard", isExiting: true }]} />);
+
+    expect(screen.getByRole("status").className).toContain("toast-stack__toast--closing");
+  });
+
+  it("does not apply the closing class to a toast that isn't exiting", () => {
+    render(<Toast toasts={[{ id: 1, message: "Copied to clipboard", isExiting: false }]} />);
+
+    expect(screen.getByRole("status").className).not.toContain("toast-stack__toast--closing");
   });
 });

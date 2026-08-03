@@ -6,6 +6,7 @@
   justify-content: center;
   background-color: rgb(15 23 42 / 45%);
   z-index: 10;
+  opacity: 1;
   animation: about-backdrop-in var(--motion-base) var(--ease-out);
 }
 
@@ -15,7 +16,26 @@
   border-radius: 10px;
   background-color: var(--surface-raised);
   box-shadow: 0 18px 40px rgb(15 23 42 / 28%);
+  opacity: 1;
+  transform: scale(1) translateY(0);
   animation: about-dialog-in var(--motion-base) var(--ease-out);
+}
+
+/* Exit uses `transition`, not `animation`/`@keyframes`, so the unmount-gating
+ * `transitionend` event has something to fire -- see useExitAnimation. */
+.about-backdrop--closing {
+  animation: none;
+  transition: opacity var(--motion-base) var(--ease-out);
+  opacity: 0;
+}
+
+.about-dialog--closing {
+  animation: none;
+  transition:
+    opacity var(--motion-base) var(--ease-out),
+    transform var(--motion-base) var(--ease-out);
+  opacity: 0;
+  transform: scale(0.96) translateY(8px);
 }
 
 @keyframes about-backdrop-in {

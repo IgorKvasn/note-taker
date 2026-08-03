@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChangelogModal } from "./ChangelogModal";
@@ -88,5 +88,29 @@ describe("ChangelogModal", () => {
     await userEvent.click(screen.getByRole("dialog"));
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dialog mounted after isOpen goes false, until the exit transition ends", () => {
+    const { rerender } = render(<ChangelogModal isOpen releases={RELEASES} onClose={vi.fn()} />);
+
+    rerender(<ChangelogModal isOpen={false} releases={RELEASES} onClose={vi.fn()} />);
+    expect(screen.getByRole("dialog")).toBeDefined();
+
+    fireEvent.transitionEnd(screen.getByTestId("changelog-backdrop"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("unmounts via a fallback timer if no transition event ever arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<ChangelogModal isOpen releases={RELEASES} onClose={vi.fn()} />);
+
+      rerender(<ChangelogModal isOpen={false} releases={RELEASES} onClose={vi.fn()} />);
+      act(() => vi.advanceTimersByTime(1000));
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

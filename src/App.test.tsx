@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -109,9 +109,10 @@ describe("App", () => {
     render(<App />);
     await screen.findByTestId("split-pane-left");
     await emitEvent(EVENT_MENU_ABOUT);
-    await screen.findByRole("dialog");
+    const dialog = await screen.findByRole("dialog");
 
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.transitionEnd(dialog);
 
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -477,6 +478,7 @@ describe("App", () => {
     expect(headings).toEqual(["v0.8.0", "v0.7.0"]);
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    fireEvent.transitionEnd(dialog);
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findByText("v0.8.0 available")).toBeDefined();

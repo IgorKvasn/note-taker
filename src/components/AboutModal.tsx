@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useExitAnimation } from "../hooks/useExitAnimation";
 import "./AboutModal.css";
 
 interface AboutModalProps {
@@ -8,6 +9,8 @@ interface AboutModalProps {
 }
 
 export function AboutModal({ isOpen, version, onClose }: AboutModalProps) {
+  const { shouldRender, isClosing, handleExitTransitionEnd } = useExitAnimation(isOpen);
+
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -23,14 +26,19 @@ export function AboutModal({ isOpen, version, onClose }: AboutModalProps) {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isOpen, onClose]);
 
-  if (!isOpen) {
+  if (!shouldRender) {
     return null;
   }
 
   return (
-    <div className="about-backdrop" data-testid="about-backdrop" onClick={onClose}>
+    <div
+      className={isClosing ? "about-backdrop about-backdrop--closing" : "about-backdrop"}
+      data-testid="about-backdrop"
+      onClick={onClose}
+      onTransitionEnd={handleExitTransitionEnd}
+    >
       <div
-        className="about-dialog"
+        className={isClosing ? "about-dialog about-dialog--closing" : "about-dialog"}
         role="dialog"
         aria-modal="true"
         aria-labelledby="about-title"

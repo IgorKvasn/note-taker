@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ReleaseInfo } from "../ipc";
+import { useExitAnimation } from "../hooks/useExitAnimation";
 import "./ChangelogModal.css";
 
 interface ChangelogModalProps {
@@ -19,6 +20,8 @@ interface ChangelogModalProps {
  * keeping every link restricted to the sanitizer's default safe protocols.
  */
 export function ChangelogModal({ isOpen, releases, onClose }: ChangelogModalProps) {
+  const { shouldRender, isClosing, handleExitTransitionEnd } = useExitAnimation(isOpen);
+
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -34,16 +37,21 @@ export function ChangelogModal({ isOpen, releases, onClose }: ChangelogModalProp
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isOpen, onClose]);
 
-  if (!isOpen) {
+  if (!shouldRender) {
     return null;
   }
 
   const newestRelease = releases[0] ?? null;
 
   return (
-    <div className="changelog-backdrop" data-testid="changelog-backdrop" onClick={onClose}>
+    <div
+      className={isClosing ? "changelog-backdrop changelog-backdrop--closing" : "changelog-backdrop"}
+      data-testid="changelog-backdrop"
+      onClick={onClose}
+      onTransitionEnd={handleExitTransitionEnd}
+    >
       <div
-        className="changelog-dialog"
+        className={isClosing ? "changelog-dialog changelog-dialog--closing" : "changelog-dialog"}
         role="dialog"
         aria-modal="true"
         aria-labelledby="changelog-title"
