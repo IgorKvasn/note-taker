@@ -6,6 +6,7 @@ mod search;
 mod state;
 mod sync;
 mod tree;
+mod update;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use search::SearchResult;
 use state::UiState;
 use sync::{RootStatus, SyncManager};
 use tree::TreeNode;
+use update::check_for_update;
 
 pub const MENU_SETTINGS: &str = "settings";
 pub const MENU_ABOUT: &str = "about";
@@ -291,6 +293,7 @@ pub fn run() {
             scan_links,
             get_state,
             save_state,
+            check_for_update,
         ])
         .setup(|app| {
             app.manage(Arc::new(SyncManager::new()));

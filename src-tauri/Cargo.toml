@@ -18,6 +18,7 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 directories = "6"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2"
