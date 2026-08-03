@@ -21,7 +21,8 @@
 }
 
 .app--first-run,
-.app--config-error {
+.app--config-error,
+.app--boot {
   align-items: center;
   justify-content: center;
   padding: 32px;

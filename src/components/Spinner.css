@@ -1,0 +1,65 @@
+.spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.spinner__ring {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color, #4a90d9);
+  animation: spinner-rotate var(--motion-slow) linear infinite;
+}
+
+.spinner__label {
+  font-size: 0.85rem;
+}
+
+@keyframes spinner-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Gates visibility behind a short delay so a fast operation never flashes the
+ * spinner (issue #60) -- a CSS delay rather than a JS timer, so nothing here
+ * needs timer handling in tests. */
+.spinner--delayed {
+  opacity: 0;
+  animation: spinner-appear 1ms calc(var(--motion-fast) + var(--motion-fast) / 4) forwards;
+}
+
+@keyframes spinner-appear {
+  to {
+    opacity: 1;
+  }
+}
+
+/* The global reduced-motion catch-all in styles.css forces every animation to
+ * a single iteration, which would freeze the rotating ring mid-turn -- so
+ * under reduced motion, hide the ring and use a fading label as the
+ * still-meaningful, non-disorienting loading cue instead. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner__ring {
+    display: none;
+  }
+
+  .spinner__label {
+    animation: spinner-fade var(--motion-slow) ease-in-out infinite alternate;
+  }
+}
+
+@keyframes spinner-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.4;
+  }
+}

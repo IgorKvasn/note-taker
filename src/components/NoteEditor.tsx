@@ -20,6 +20,7 @@ import { NoteToolbar } from "./NoteToolbar";
 import { NoteView } from "./NoteView";
 import { BacklinksSection } from "./BacklinksSection";
 import { useNoteLinks } from "../hooks/useNoteLinks";
+import { Spinner } from "./Spinner";
 import "./NoteEditor.css";
 
 /** Debounce window between the last keystroke and the autosave `save_note` call. */
@@ -114,6 +115,10 @@ export function NoteEditor({
   const [view, setView] = useState<EditorView | null>(null);
   const [content, setContent] = useState("");
   const [isConflicted, setIsConflicted] = useState(false);
+  // Tracks only the initial `open_note` load (issue #60) -- the sync-status
+  // re-fetch below is a background refresh of an already-open note, not a
+  // state worth surfacing loading feedback for.
+  const [isLoading, setIsLoading] = useState(true);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   // The open note's own frontmatter id (always non-empty -- `open_note`
@@ -200,6 +205,7 @@ export function NoteEditor({
 
     setIsConflicted(false);
     setResolveError(null);
+    setIsLoading(true);
 
     const loadGeneration = ++loadGenerationRef.current;
 
@@ -215,10 +221,12 @@ export function NoteEditor({
         setContent(result.content);
         setIsConflicted(result.is_conflicted);
         setNoteId(result.id);
+        setIsLoading(false);
         moveCursorTo(view, scrollToOffsetRef.current);
       })
       .catch(() => {
         if (!isCancelled) {
+          setIsLoading(false);
           onOpenError?.();
         }
       });
@@ -334,6 +342,11 @@ export function NoteEditor({
         </p>
       )}
       <div className="note-editor__body">
+        {isLoading && (
+          <div className="note-editor__loading">
+            <Spinner delayed label="Opening note…" />
+          </div>
+        )}
         <div
           className="note-editor__cm-host"
           data-testid="note-editor"

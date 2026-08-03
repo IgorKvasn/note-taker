@@ -65,4 +65,17 @@ describe("SearchResultsList", () => {
 
     expect(onSelect).toHaveBeenCalledWith(theResult);
   });
+
+  it("shows a searching indicator alongside stale results while a newer search is in flight", () => {
+    render(<SearchResultsList results={[result()]} roots={[ROOT_A]} isSearching onSelect={() => {}} />);
+
+    expect(screen.getByTestId("search-results-searching")).toBeDefined();
+    expect(screen.getByTestId("search-results")).toBeDefined();
+  });
+
+  it("shows no searching indicator once the search has settled", () => {
+    render(<SearchResultsList results={[result()]} roots={[ROOT_A]} isSearching={false} onSelect={() => {}} />);
+
+    expect(screen.queryByTestId("search-results-searching")).toBeNull();
+  });
 });

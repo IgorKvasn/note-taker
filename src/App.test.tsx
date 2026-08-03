@@ -74,6 +74,14 @@ describe("App", () => {
     expect(screen.getByTestId("split-pane-right")).toBeDefined();
   });
 
+  it("shows a loading indicator instead of a blank window while the initial config fetch is in flight", async () => {
+    mockInvoke({ get_config: new Promise(() => {}) });
+    render(<App />);
+
+    expect(await screen.findByTestId("spinner")).toBeDefined();
+    expect(screen.queryByTestId("split-pane-left")).toBeNull();
+  });
+
   it("keeps the About modal closed until the menu event arrives", async () => {
     render(<App />);
     await screen.findByTestId("split-pane-left");
