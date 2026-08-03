@@ -7,3 +7,18 @@
   gap: 12px;
   z-index: 20;
 }
+
+.notice-stack > :nth-child(1) {
+  animation-delay: 0ms;
+  animation-fill-mode: backwards;
+}
+
+.notice-stack > :nth-child(2) {
+  animation-delay: 40ms;
+  animation-fill-mode: backwards;
+}
+
+.notice-stack > :nth-child(n + 3) {
+  animation-delay: 80ms;
+  animation-fill-mode: backwards;
+}

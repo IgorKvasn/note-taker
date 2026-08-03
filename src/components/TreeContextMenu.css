@@ -9,6 +9,15 @@
   border-radius: 6px;
   background-color: var(--surface-raised);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  transform-origin: top left;
+  animation: context-menu-in var(--motion-fast) var(--ease-out);
+}
+
+@keyframes context-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
 }
 
 .notes-panel__context-menu button {

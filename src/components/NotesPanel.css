@@ -172,6 +172,14 @@
   border-radius: 8px;
   background-color: var(--surface-raised);
   box-shadow: 0 12px 28px rgb(15 23 42 / 28%);
+  animation: conflict-toast-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes conflict-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
 }
 
 .notes-panel__conflict-toast p {

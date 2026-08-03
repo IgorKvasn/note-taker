@@ -6,6 +6,7 @@
   justify-content: center;
   background-color: rgb(15 23 42 / 45%);
   z-index: 10;
+  animation: changelog-backdrop-in var(--motion-base) var(--ease-out);
 }
 
 .changelog-dialog {
@@ -17,6 +18,20 @@
   border-radius: 10px;
   background-color: var(--surface-raised);
   box-shadow: 0 18px 40px rgb(15 23 42 / 28%);
+  animation: changelog-dialog-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes changelog-backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes changelog-dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
 }
 
 .changelog-dialog__title {

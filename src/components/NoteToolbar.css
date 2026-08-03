@@ -30,11 +30,16 @@
   color: var(--text-color);
   font-size: 13px;
   cursor: pointer;
+  transition: transform var(--motion-fast) var(--ease-out);
 }
 
 .note-toolbar__button:hover:not(:disabled) {
   background-color: var(--surface-hover);
   border-color: var(--border-color);
+}
+
+.note-toolbar__button:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .note-toolbar__button:disabled {
