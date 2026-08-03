@@ -5,8 +5,10 @@ use serde::Serialize;
 
 use crate::notes::strip_frontmatter;
 
-/// A single match's `[start, end)` character offset within `snippet` -- the
-/// frontend highlights these ranges rather than the backend baking in markup.
+/// A single match's `[start, end)` offset within `snippet`, counted in UTF-16
+/// code units -- the same unit JavaScript string indices use -- so the
+/// frontend can slice `snippet` directly to highlight these ranges rather
+/// than the backend baking in markup.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MatchRange {
     pub start: usize,
@@ -30,31 +32,91 @@ pub struct SearchResult {
     /// (spec §8), so the frontend must tell the two cases apart rather than
     /// inferring it from an empty vec meaning "no matches at all".
     pub snippet_matches: Vec<MatchRange>,
-    /// The first body match's character offset within the note's full body
-    /// (not the snippet), for the frontend to scroll the editor there and
-    /// place the cursor (spec §8). `None` for a title-only hit -- there is no
-    /// body position to scroll to.
+    /// The first body match's UTF-16 offset within the note's full body (not
+    /// the snippet), for the frontend to scroll the editor there and place
+    /// the cursor (spec §8) -- CodeMirror's document offsets are also UTF-16
+    /// code units, so this needs no further conversion on the frontend.
+    /// `None` for a title-only hit -- there is no body position to scroll to.
     pub first_match_offset: Option<usize>,
     pub seq: u64,
 }
 
 /// Counts non-overlapping, case-insensitive occurrences of `query` in
 /// `haystack` (`"aa"` in `"aaaa"` counts 2, not 3) and returns each match's
-/// character offset, restarting the search just past the previous match's end.
+/// UTF-16 offset into `haystack`, restarting the search just past the
+/// previous match's end.
+///
+/// `char::to_lowercase()` is not length-preserving (e.g. `İ` (U+0130) lowers
+/// to `i` followed by a combining dot above, 1 char growing to 2), so matches
+/// found in a lowercased copy of `haystack` cannot be reported as offsets into
+/// that copy -- they would drift past the end of the original string and
+/// panic on slicing. Instead, every original char's lowercase expansion is
+/// appended to `lower_buf` alongside a record of where that char started (in
+/// UTF-16 units) in the original.
+///
+/// A raw byte-level substring search over `lower_buf` can still land on a
+/// "match" that starts or ends strictly inside one char's expansion rather
+/// than on a boundary between two chars' expansions -- e.g. searching for the
+/// literal two-char sequence "combining dot above" + `i` inside `"İİ"`'s
+/// lowercased form (`"i" + dot + i + dot`) finds a byte range spanning the
+/// second half of the first `İ`'s expansion and the first half of the
+/// second's, which does not correspond to any real span of original
+/// characters. Such candidates are skipped (not reported, not panicked on) by
+/// advancing one byte and retrying, since they are byte-string coincidences,
+/// not genuine matches.
 fn find_matches(haystack: &str, query_lower: &str) -> Vec<MatchRange> {
     if query_lower.is_empty() {
         return Vec::new();
     }
 
-    let haystack_lower = haystack.to_lowercase();
+    let mut lower_buf = String::new();
+    // Parallel to `lower_buf`: (byte offset into lower_buf, UTF-16 offset into
+    // haystack) for the start of each original char's lowercase expansion,
+    // plus a final sentinel pair for the end of both strings.
+    let mut boundaries = Vec::new();
+    let mut utf16_offset = 0usize;
+
+    for ch in haystack.chars() {
+        boundaries.push((lower_buf.len(), utf16_offset));
+        lower_buf.extend(ch.to_lowercase());
+        utf16_offset += ch.len_utf16();
+    }
+    boundaries.push((lower_buf.len(), utf16_offset));
+
+    let to_original_offset = |lower_byte_offset: usize| -> Option<usize> {
+        boundaries
+            .binary_search_by_key(&lower_byte_offset, |&(lower_offset, _)| lower_offset)
+            .ok()
+            .map(|index| boundaries[index].1)
+    };
+
     let mut matches = Vec::new();
     let mut search_from = 0;
 
-    while let Some(found_at) = haystack_lower[search_from..].find(query_lower) {
-        let start = search_from + found_at;
-        let end = start + query_lower.len();
-        matches.push(MatchRange { start, end });
-        search_from = end;
+    while search_from <= lower_buf.len() {
+        let Some(found_at) = lower_buf[search_from..].find(query_lower) else {
+            break;
+        };
+        let lower_start = search_from + found_at;
+        let lower_end = lower_start + query_lower.len();
+
+        match (to_original_offset(lower_start), to_original_offset(lower_end)) {
+            (Some(start), Some(end)) => {
+                matches.push(MatchRange { start, end });
+                search_from = lower_end;
+            }
+            // Byte-string coincidence straddling an expansion boundary, not a
+            // real match against original characters -- retry from the next
+            // char boundary in `lower_buf` (not simply `lower_start + 1`,
+            // which can itself split a multi-byte char and panic on slicing).
+            _ => {
+                let mut next = lower_start + 1;
+                while next < lower_buf.len() && !lower_buf.is_char_boundary(next) {
+                    next += 1;
+                }
+                search_from = next;
+            }
+        }
     }
 
     matches
@@ -68,14 +130,33 @@ fn first_content_line(body: &str) -> &str {
         .unwrap_or("")
 }
 
-/// The line containing `body_offset` (a body-relative character offset),
-/// along with that offset translated to be relative to the returned line.
+/// The byte offset in `text` corresponding to `utf16_offset` UTF-16 code
+/// units in, i.e. the position a JavaScript string index of `utf16_offset`
+/// would refer to. Assumes `utf16_offset` lands on a char boundary, which
+/// holds for every offset this module produces or consumes.
+fn byte_offset_for_utf16(text: &str, utf16_offset: usize) -> usize {
+    let mut utf16_count = 0;
+    for (byte_offset, ch) in text.char_indices() {
+        if utf16_count == utf16_offset {
+            return byte_offset;
+        }
+        utf16_count += ch.len_utf16();
+    }
+    text.len()
+}
+
+/// The line containing `body_offset` (a body-relative UTF-16 offset), along
+/// with that offset translated to be relative to the returned line (also in
+/// UTF-16 units).
 fn line_containing(body: &str, body_offset: usize) -> (&str, usize) {
-    let line_start = body[..body_offset].rfind('\n').map_or(0, |index| index + 1);
-    let line_end = body[body_offset..]
+    let byte_offset = byte_offset_for_utf16(body, body_offset);
+    let line_start = body[..byte_offset].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = body[byte_offset..]
         .find('\n')
-        .map_or(body.len(), |index| body_offset + index);
-    (&body[line_start..line_end], body_offset - line_start)
+        .map_or(body.len(), |index| byte_offset + index);
+    let line = &body[line_start..line_end];
+    let line_offset = body[line_start..byte_offset].encode_utf16().count();
+    (line, line_offset)
 }
 
 struct NoteMatch {
@@ -256,6 +337,51 @@ mod tests {
     }
 
     #[test]
+    fn find_matches_handles_lowercase_expansion_that_grows_byte_length() {
+        // 'İ' (U+0130, Turkish dotted capital I) is 2 bytes but lowercases to
+        // "i" + combining dot above (U+0069 U+0307), which is 3 bytes -- a
+        // haystack of 5 of these plus "x" is 11 bytes but lowercases to 16
+        // bytes, so a naive byte offset from the lowercased copy would land
+        // past the end of the 11-byte original and panic on slicing.
+        let matches = find_matches("İİİİİx", "x");
+        assert_eq!(matches.len(), 1);
+        // UTF-16 offset: each 'İ' is one UTF-16 code unit, so "x" starts at 5.
+        assert_eq!(matches[0], MatchRange { start: 5, end: 6 });
+    }
+
+    #[test]
+    fn find_matches_skips_a_byte_level_match_that_straddles_two_expansions() {
+        // 'İ' lowercases to "i" + combining dot above (U+0307). Lowercasing
+        // "İİ" therefore gives "i\u{0307}i\u{0307}". The literal query
+        // "\u{0307}i" (already lowercase) is a byte-for-byte substring of
+        // that, spanning the tail of the first İ's expansion and the head of
+        // the second's -- but that span doesn't correspond to any real
+        // character range in the original "İİ", so it must not be reported
+        // (and must not panic).
+        assert!(find_matches("İİ", "\u{0307}i").is_empty());
+    }
+
+    #[test]
+    fn find_matches_still_finds_a_genuine_match_after_skipping_a_straddling_one() {
+        // Same straddling byte sequence as above, but followed by real text
+        // that should still be found.
+        let matches = find_matches("İİx", "\u{0307}i");
+        assert!(matches.is_empty());
+        let matches = find_matches("İİx", "x");
+        assert_eq!(matches, vec![MatchRange { start: 2, end: 3 }]);
+    }
+
+    #[test]
+    fn find_matches_reports_utf16_offsets_not_byte_offsets() {
+        // "café " is 5 chars but 6 bytes ('é' is 2 bytes in UTF-8), and both
+        // are 5 UTF-16 code units ('é' is 1 code unit) -- the match should be
+        // reported at the UTF-16/JS-string-index position, not the byte one.
+        let matches = find_matches("café préféré est ici", "préféré");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], MatchRange { start: 5, end: 12 });
+    }
+
+    #[test]
     fn search_note_folds_title_and_body_matches_into_one_count() {
         let found = search_note("docker notes", "some docker compose config", "docker").unwrap();
         assert_eq!(found.match_count, 2);
@@ -311,6 +437,36 @@ mod tests {
     #[test]
     fn search_note_returns_none_when_neither_title_nor_body_match() {
         assert!(search_note("title", "body text", "xyz").is_none());
+    }
+
+    #[test]
+    fn search_note_does_not_panic_on_length_changing_lowercase_mapping() {
+        // Regression test for a panic where offsets from a lowercased copy of
+        // the body (whose byte length can grow, e.g. 'İ' -> "i" + combining
+        // dot above) were applied to the original, shorter string.
+        let found = search_note("title", "İİİİİx", "x").unwrap();
+        assert_eq!(found.match_count, 1);
+        assert_eq!(found.snippet, "İİİİİx");
+        assert_eq!(found.snippet_matches, vec![MatchRange { start: 5, end: 6 }]);
+    }
+
+    #[test]
+    fn search_note_snippet_matches_align_with_utf16_offsets_for_multibyte_prefix() {
+        // Regression test: match ranges must be usable as JS (UTF-16) string
+        // indices, not raw UTF-8 byte offsets, so a multi-byte character
+        // before the match must not shift the reported range.
+        let found = search_note(
+            "title",
+            "first line\nMon café préféré est ici\nthird",
+            "préféré",
+        )
+        .unwrap();
+        assert_eq!(found.snippet, "Mon café préféré est ici");
+        // "préféré" starts after "Mon café " (9 UTF-16 units: 'é' is 1 unit).
+        assert_eq!(
+            found.snippet_matches,
+            vec![MatchRange { start: 9, end: 16 }]
+        );
     }
 
     #[test]
