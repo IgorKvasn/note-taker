@@ -97,4 +97,31 @@ describe("useNoteLinks", () => {
     });
     expect(scanCount()).toBe(before + 1);
   });
+
+  it("rescans on window focus, picking up notes created out of band", async () => {
+    const { result } = renderHook(() => useNoteLinks("A"));
+    await waitFor(() => expect(result.current.linkableNotes).toHaveLength(1));
+    const scanCount = () => invoke.mock.calls.filter(([command]) => command === "scan_links").length;
+    const before = scanCount();
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(scanCount()).toBe(before + 1);
+  });
+
+  it("stops rescanning on focus once unmounted", async () => {
+    const { result, unmount } = renderHook(() => useNoteLinks("A"));
+    await waitFor(() => expect(result.current.linkableNotes).toHaveLength(1));
+    const scanCount = () => invoke.mock.calls.filter(([command]) => command === "scan_links").length;
+
+    unmount();
+    const after = scanCount();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(scanCount()).toBe(after);
+  });
 });

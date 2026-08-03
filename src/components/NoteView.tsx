@@ -38,7 +38,7 @@ const SANITIZE_SCHEMA = {
  * `SANITIZE_SCHEMA` still restricts `src` to http(s), so an
  * `![alt](note:...)` image is stripped downstream.
  */
-function transformUrl(url: string): string {
+function allowNoteSchemeUrl(url: string): string {
   return url.startsWith(NOTE_LINK_PROTOCOL) ? url : defaultUrlTransform(url);
 }
 
@@ -93,9 +93,7 @@ function CopyableBlock({ as: Tag, className, children, onCopy }: CopyableBlockPr
   );
 }
 
-interface NoteLinkProps {
-  href: string | undefined;
-  children: React.ReactNode;
+interface NoteLinkProps extends React.ComponentPropsWithoutRef<"a"> {
   resolveNoteLink: ((id: string) => string | null) | undefined;
   onOpenNoteLink: ((path: string) => void) | undefined;
 }
@@ -109,10 +107,16 @@ interface NoteLinkProps {
  * unresolvable target is a normal temporary state (not yet pulled, or in
  * another root), so the user is better served seeing it at a glance.
  */
-function NoteLink({ href, children, resolveNoteLink, onOpenNoteLink }: NoteLinkProps) {
+function NoteLink({ href, children, resolveNoteLink, onOpenNoteLink, ...anchorProps }: NoteLinkProps) {
   const targetId = noteLinkTarget(href);
+  // Every other anchor keeps the attributes the sanitizer already vetted --
+  // notably the aria and footnote-backref props GFM puts on footnote links.
   if (targetId === null) {
-    return <a href={href}>{children}</a>;
+    return (
+      <a href={href} {...anchorProps}>
+        {children}
+      </a>
+    );
   }
 
   const path = resolveNoteLink?.(targetId) ?? null;
@@ -126,6 +130,7 @@ function NoteLink({ href, children, resolveNoteLink, onOpenNoteLink }: NoteLinkP
 
   return (
     <a
+      {...anchorProps}
       className="note-view__note-link"
       href={`${NOTE_LINK_PROTOCOL}${targetId}`}
       data-testid="note-link"
@@ -148,7 +153,7 @@ export function NoteView({ content, resolveNoteLink, onOpenNoteLink }: NoteViewP
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, SANITIZE_SCHEMA]]}
-        urlTransform={transformUrl}
+        urlTransform={allowNoteSchemeUrl}
         components={{
           pre: ({ className = "", children }) => (
             <CopyableBlock as="pre" className={className} onCopy={showToast}>
@@ -160,8 +165,8 @@ export function NoteView({ content, resolveNoteLink, onOpenNoteLink }: NoteViewP
               {children}
             </CopyableBlock>
           ),
-          a: ({ href, children }) => (
-            <NoteLink href={href} resolveNoteLink={resolveNoteLink} onOpenNoteLink={onOpenNoteLink}>
+          a: ({ children, node: _node, ...anchorProps }) => (
+            <NoteLink {...anchorProps} resolveNoteLink={resolveNoteLink} onOpenNoteLink={onOpenNoteLink}>
               {children}
             </NoteLink>
           ),

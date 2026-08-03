@@ -75,4 +75,12 @@ describe("NoteView note: links", () => {
 
     expect(screen.getByText("My Note Title")).toBeDefined();
   });
+
+  it("keeps the aria and footnote attributes GFM puts on ordinary links", () => {
+    const { container } = render(<NoteView content={"Text with a footnote[^1]\n\n[^1]: The note.\n"} />);
+
+    const backref = container.querySelector("a[data-footnote-backref]");
+    expect(backref).not.toBeNull();
+    expect(backref?.getAttribute("aria-label")).toBe("Back to reference 1");
+  });
 });

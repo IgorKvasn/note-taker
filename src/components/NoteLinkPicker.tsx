@@ -12,7 +12,7 @@ interface NoteLinkPickerProps {
  * Matches on title *and* folder path: titles are only unique per-directory, so
  * the folder is what disambiguates two notes with the same name.
  */
-function matches(note: LinkedNote, query: string): boolean {
+function noteMatchesFilter(note: LinkedNote, query: string): boolean {
   if (query === "") {
     return true;
   }
@@ -37,7 +37,7 @@ export function NoteLinkPicker({ notes, onSelect, onCancel }: NoteLinkPickerProp
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const filtered = useMemo(() => notes.filter((note) => matches(note, query)), [notes, query]);
+  const filtered = useMemo(() => notes.filter((note) => noteMatchesFilter(note, query)), [notes, query]);
 
   // A shrinking result list must not leave the highlight past its end.
   const boundedIndex = filtered.length === 0 ? 0 : Math.min(activeIndex, filtered.length - 1);

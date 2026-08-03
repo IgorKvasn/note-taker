@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { COMMAND_SCAN_LINKS, EVENT_SYNC_STATUS, type LinkedNote, type ScanLinksResult, type SyncStatusEvent } from "../ipc";
+import {
+  COMMAND_SCAN_LINKS,
+  EVENT_SYNC_STATUS,
+  type LinkedNote,
+  type ScanLinksResult,
+  type SyncStatusEvent,
+} from "../ipc";
 
-/** Stable identity, so a root with no scan yet doesn't rebuild the map each render. */
+/** Shared so `linkableNotes` keeps one identity across renders with no scan yet. */
 const EMPTY_NOTES: LinkedNote[] = [];
 
 /**
@@ -47,8 +53,15 @@ export function useNoteLinks(rootId: string) {
       }
     });
 
+    // Mirrors the tree's own refresh triggers (`NotesPanel`): a settled sync,
+    // and window focus as the catch-all for notes created, renamed or deleted
+    // out of band -- otherwise a note added since the last sync is missing from
+    // the picker, and links to it look broken.
+    window.addEventListener("focus", scan);
+
     return () => {
       isCancelled = true;
+      window.removeEventListener("focus", scan);
       pendingUnlisten.then((unlisten) => unlisten()).catch(() => {});
     };
   }, [rootId]);
