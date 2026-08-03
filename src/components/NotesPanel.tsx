@@ -620,7 +620,12 @@ export function NotesPanel({
     if (pendingDelete === null) return;
 
     const { rootId, node } = pendingDelete;
-    await invoke(COMMAND_DELETE_ITEM, { rootId, path: node.path });
+    try {
+      await invoke(COMMAND_DELETE_ITEM, { rootId, path: node.path });
+    } catch (error) {
+      setMoveError(String(error));
+      return;
+    }
 
     setPendingDelete(null);
     if (deletionClearsOpenNote(rootId, node.path)) {

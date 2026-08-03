@@ -654,6 +654,25 @@ describe("NotesPanel", () => {
       await waitFor(() => expect(screen.queryByText("other.md")).toBeNull());
       expect(onNoteDeleted).not.toHaveBeenCalled();
     });
+
+    it("shows an inline error and keeps the dialog open when delete_item fails", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "list_tree") return Promise.resolve([note("note.md", "note.md")]);
+        if (command === "delete_item") return Promise.reject(new Error("permission denied"));
+        return Promise.resolve(undefined);
+      });
+      render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+      const noteButton = await screen.findByRole("button", { name: "note.md" });
+      await userEvent.pointer({ keys: "[MouseRight]", target: noteButton });
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/permission denied/);
+      expect(await screen.findByRole("dialog")).toBeDefined();
+      expect(screen.getByText("note.md")).toBeDefined();
+    });
   });
 
   describe("search", () => {
