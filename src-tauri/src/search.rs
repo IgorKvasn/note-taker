@@ -100,7 +100,10 @@ fn find_matches(haystack: &str, query_lower: &str) -> Vec<MatchRange> {
         let lower_start = search_from + found_at;
         let lower_end = lower_start + query_lower.len();
 
-        match (to_original_offset(lower_start), to_original_offset(lower_end)) {
+        match (
+            to_original_offset(lower_start),
+            to_original_offset(lower_end),
+        ) {
             (Some(start), Some(end)) => {
                 matches.push(MatchRange { start, end });
                 search_from = lower_end;
