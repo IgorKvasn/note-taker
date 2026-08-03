@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AboutModal } from "./components/AboutModal";
+import { LocalOnlyNotice } from "./components/LocalOnlyNotice";
 import { NoteEditor } from "./components/NoteEditor";
+import { NoticeStack } from "./components/NoticeStack";
 import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { SplitPane } from "./components/SplitPane";
@@ -229,17 +231,7 @@ export function App() {
           </div>
         </div>
       )}
-      {showLocalOnlyNotice && (
-        <div className="local-only-notice" role="status">
-          <p>
-            Notes here are saved and committed locally. Sync to a remote is off (or none is configured), so nothing
-            leaves this machine automatically.
-          </p>
-          <button type="button" onClick={dismissNotice}>
-            Got it
-          </button>
-        </div>
-      )}
+      <NoticeStack>{showLocalOnlyNotice && <LocalOnlyNotice onDismiss={dismissNotice} />}</NoticeStack>
     </div>
   );
 }

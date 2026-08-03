@@ -1,0 +1,26 @@
+.local-only-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 420px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background-color: var(--surface-raised);
+  box-shadow: 0 12px 28px rgb(15 23 42 / 28%);
+}
+
+.local-only-notice p {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.local-only-notice button {
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 4px 10px;
+  cursor: pointer;
+}
