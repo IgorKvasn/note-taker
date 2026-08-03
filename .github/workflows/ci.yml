@@ -32,6 +32,19 @@ jobs:
 
       - run: npm test
 
+  # Formatting needs no compiled dependencies, so it stays out of the `rust`
+  # job to fail in seconds instead of behind a full dependency build.
+  rust-fmt:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: rustup component add rustfmt
+
+      - name: cargo fmt
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
   rust:
     # Must match the release build host: the .deb links against 26.04's glibc,
     # so checks run on the same release the artifact is built on. See README.md.
@@ -39,35 +52,44 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The webkit2gtk/gtk `-sys` crates resolve these headers through
+      # pkg-config in their build scripts, so they are needed even for clippy,
+      # not just for bundling. Cached because apt costs ~40s per run.
       - name: Install Tauri build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            build-essential \
-            curl \
-            file \
-            libssl-dev \
-            libayatana-appindicator3-dev \
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: >-
+            libwebkit2gtk-4.1-dev
+            libgtk-3-dev
+            build-essential
+            curl
+            file
+            libssl-dev
+            libayatana-appindicator3-dev
             librsvg2-dev
+          version: 1
 
       - name: Install Rust toolchain
-        run: rustup component add rustfmt clippy
+        run: rustup component add clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-all-crates: true
+          # Only main writes the cache. PRs previously each saved a ~931MB
+          # entry under a fresh key that nothing ever restored, so every run
+          # fell back to a stale prefix match and rebuilt all dependencies.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # No frontend build here on purpose: tauri-build only enforces
       # frontendDist when bundling, so check/clippy/test compile without dist.
-      - name: cargo fmt
-        working-directory: src-tauri
-        run: cargo fmt --all --check
-
+      #
+      # `--profile test` matters: the default dev profile emits check-only
+      # .rmeta that `cargo test` cannot link against, so the two steps used to
+      # compile all ~177 dependencies twice. Same profile means test reuses this.
       - name: cargo clippy
         working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --profile test -- -D warnings
 
       - name: cargo test
         working-directory: src-tauri
