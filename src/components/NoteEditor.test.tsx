@@ -234,6 +234,137 @@ describe("NoteEditor", () => {
     expect(strong.querySelectorAll(".cm-live-preview-marker")).toHaveLength(2);
   });
 
+  describe("save failure handling (issue #46)", () => {
+    it("shows an inline error when an autosave fails, instead of dropping it silently", async () => {
+      const user = userEvent.setup();
+      invoke.mockImplementation((command: string) => {
+        if (command === "open_note") {
+          return Promise.resolve({ content: "Loaded\n", id: "01LOADED", is_conflicted: false });
+        }
+        if (command === "save_note") {
+          return Promise.reject(new Error("permission denied"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard(" edited");
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_note", expect.anything()));
+
+      expect(await screen.findByRole("alert")).toHaveProperty(
+        "textContent",
+        expect.stringContaining("permission denied"),
+      );
+    });
+
+    it(
+      "retries a failed autosave and clears the error once a retry succeeds",
+      async () => {
+        let saveAttempts = 0;
+        invoke.mockImplementation((command: string) => {
+          if (command === "open_note") {
+            return Promise.resolve({ content: "Loaded\n", id: "01LOADED", is_conflicted: false });
+          }
+          if (command === "save_note") {
+            saveAttempts += 1;
+            return saveAttempts === 1 ? Promise.reject(new Error("disk full")) : Promise.resolve(undefined);
+          }
+          return Promise.resolve(undefined);
+        });
+
+        const user = userEvent.setup();
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        await screen.findByText("Loaded");
+
+        const editable = await screen.findByRole("textbox");
+        await user.click(editable);
+        await user.keyboard(" edited");
+
+        await waitFor(() => expect(saveAttempts).toBe(1));
+        expect(await screen.findByRole("alert")).toHaveProperty(
+          "textContent",
+          expect.stringContaining("disk full"),
+        );
+
+        await waitFor(() => expect(saveAttempts).toBe(2), { timeout: 7000 });
+        await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      },
+      10000,
+    );
+
+    it("does not throw an unhandled rejection when the unmount-cleanup flush fails", async () => {
+      const user = userEvent.setup();
+      invoke.mockImplementation((command: string) => {
+        if (command === "open_note") {
+          return Promise.resolve({ content: "Loaded\n", id: "01LOADED", is_conflicted: false });
+        }
+        if (command === "save_note") {
+          return Promise.reject(new Error("permission denied"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      const { unmount } = render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard(" edited");
+
+      // Still inside the debounce window when we unmount, so cleanup's
+      // `flushPendingSave()` call is the one that hits the rejected `save_note`.
+      expect(invoke).not.toHaveBeenCalledWith("save_note", expect.anything());
+
+      expect(() => unmount()).not.toThrow();
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_note", expect.anything()));
+    });
+
+    it("still surfaces an error when mark_resolved's own flush fails, via mark_resolved's conflict-marker check", async () => {
+      const user = userEvent.setup();
+      invoke.mockImplementation((command: string) => {
+        if (command === "open_note") {
+          return Promise.resolve({
+            content: "<<<<<<< HEAD\nstuff\n=======\n",
+            id: "01LOADED",
+            is_conflicted: true,
+          });
+        }
+        if (command === "save_note") {
+          // flushPendingSave no longer rejects, so mark_resolved's own chain
+          // can't see this failure directly -- it must still surface an error
+          // some other way rather than clearing the conflict silently.
+          return Promise.reject(new Error("disk full"));
+        }
+        if (command === "mark_resolved") {
+          return Promise.reject(new Error("this note still has unresolved conflict markers"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard(" resolved-by-hand");
+
+      const resolveButton = await screen.findByRole("button", { name: /mark resolved/i });
+      await user.click(resolveButton);
+
+      // The conflict must not be cleared: the underlying save never landed.
+      await waitFor(() => expect(screen.getByRole("button", { name: /mark resolved/i })).toBeDefined());
+      const alerts = await waitFor(() => {
+        const found = screen.getAllByRole("alert");
+        expect(found.length).toBeGreaterThan(0);
+        return found;
+      });
+      expect(alerts.map((alert) => alert.textContent).join(" ")).toContain("unresolved conflict markers");
+    });
+  });
+
   describe("conflict resolution", () => {
     it("shows a Mark resolved button when the note is conflicted", async () => {
       mockInvoke({ open_note: { content: "<<<<<<< HEAD\n", id: "01LOADED", is_conflicted: true } });

@@ -23,6 +23,11 @@ import "./NoteEditor.css";
 /** Debounce window between the last keystroke and the autosave `save_note` call. */
 const AUTOSAVE_DEBOUNCE_MS = 600;
 
+/** Delay before retrying a failed autosave, so a persistent failure (e.g. a
+ * removed root) doesn't spin -- retries continue until either the save
+ * succeeds or the pending content is superseded by a new edit. */
+const SAVE_RETRY_MS = 5000;
+
 /** Tags a dispatch as loading content from disk rather than a user edit, so
  * the update listener below doesn't arm an autosave for our own content-load
  * or sync-triggered refresh writes. */
@@ -79,6 +84,11 @@ export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scro
   const scrollToOffsetRef = useRef(scrollToOffset);
   scrollToOffsetRef.current = scrollToOffset;
   const pendingSaveRef = useRef<{ rootId: string; path: string; content: string } | null>(null);
+  // Set true by the mount effect's cleanup below; checked both there (as
+  // `isCancelled`, its own closure copy) and inside `flushPendingSave`'s retry
+  // `.catch`, which runs outside that effect and so needs this ref -- a plain
+  // closure variable wouldn't be reachable from it.
+  const isUnmountedRef = useRef(false);
   // Both the initial `open_note` load and the sync-status-triggered re-fetch
   // read disk asynchronously and can resolve out of order -- bumped whenever
   // either one starts, so a resolution can check it's still the latest before
@@ -88,11 +98,19 @@ export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scro
   const [content, setContent] = useState("");
   const [isConflicted, setIsConflicted] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   /** Returns a promise that resolves once any pending autosave has been sent
    * (and settled) -- callers that need the disk write to land first (e.g.
    * mark_resolved reading the file back) must await it; unmount cleanup fires
-   * it without waiting, since nothing there depends on the ordering. */
+   * it without waiting, since nothing there depends on the ordering.
+   *
+   * On failure, the pending content is put back so a later flush (the next
+   * debounce tick, or the next manual flush) retries it instead of the
+   * content being silently dropped (issue #46) -- this resolves rather than
+   * rejects even on failure so callers awaiting it (e.g. markResolved's
+   * chain) don't treat a save failure as their own failure.
+   */
   const flushPendingSave = () => {
     if (saveTimeoutRef.current !== null) {
       clearTimeout(saveTimeoutRef.current);
@@ -103,7 +121,22 @@ export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scro
       return Promise.resolve();
     }
     pendingSaveRef.current = null;
-    return invoke(COMMAND_SAVE_NOTE, pending).catch(() => {});
+    return invoke(COMMAND_SAVE_NOTE, pending)
+      .then(() => {
+        if (!isUnmountedRef.current) {
+          setSaveError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (isUnmountedRef.current) {
+          return;
+        }
+        if (pendingSaveRef.current === null) {
+          pendingSaveRef.current = pending;
+          saveTimeoutRef.current = setTimeout(flushPendingSave, SAVE_RETRY_MS);
+        }
+        setSaveError(error instanceof Error ? error.message : String(error));
+      });
   };
 
   useEffect(() => {
@@ -112,6 +145,7 @@ export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scro
       return;
     }
 
+    isUnmountedRef.current = false;
     let isCancelled = false;
 
     const view = new EditorView({
@@ -171,6 +205,7 @@ export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scro
     return () => {
       isCancelled = true;
       flushPendingSave();
+      isUnmountedRef.current = true;
       view.destroy();
       viewRef.current = null;
       setView(null);
@@ -268,6 +303,11 @@ export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scro
       {resolveError !== null && (
         <p role="alert" className="note-editor__resolve-error">
           {resolveError}
+        </p>
+      )}
+      {saveError !== null && (
+        <p role="alert" className="note-editor__save-error">
+          Autosave failed, retrying: {saveError}
         </p>
       )}
       <div className="note-editor__body">

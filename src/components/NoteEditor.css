@@ -39,7 +39,8 @@
   background-color: var(--surface-hover);
 }
 
-.note-editor__resolve-error {
+.note-editor__resolve-error,
+.note-editor__save-error {
   margin: 0;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border-color);
