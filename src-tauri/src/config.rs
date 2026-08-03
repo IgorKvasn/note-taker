@@ -125,24 +125,32 @@ pub fn resolve_path_in_root(root_id: &str, relative_path: &str) -> Result<PathBu
         .canonicalize()
         .map_err(|error| format!("could not resolve root path: {error}"))?;
 
-    let candidate = canonical_root.join(relative_path);
+    // Backslash is rejected outright rather than left to `components()`: that
+    // parses separators for the *host* platform, so a build running on Linux
+    // (e.g. the test suite) would treat `..\..\secret` as one opaque `Normal`
+    // segment and let it through, even though it's a real traversal on Windows.
+    if relative_path.contains('\\') {
+        return Err(format!("path escapes its root: {relative_path}"));
+    }
 
     // `canonicalize` requires the path to exist, which a not-yet-created note
     // wouldn't -- so containment is checked lexically via `components()`
     // instead, which also collapses `.`/`..` without touching the filesystem.
-    let mut depth: i32 = 0;
-    for component in relative_path.split('/') {
+    // Anything that isn't a plain descendant segment (`RootDir`/`Prefix` for
+    // absolute paths, `ParentDir` for `..`) is rejected outright rather than
+    // depth-counted, since counting treats an absolute path as never escaping.
+    for component in Path::new(relative_path).components() {
         match component {
-            "" | "." => {}
-            ".." => depth -= 1,
-            _ => depth += 1,
-        }
-        if depth < 0 {
-            return Err(format!("path escapes its root: {relative_path}"));
+            std::path::Component::Normal(_) | std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(format!("path escapes its root: {relative_path}"));
+            }
         }
     }
 
-    Ok(candidate)
+    Ok(canonical_root.join(relative_path))
 }
 
 pub fn get_config() -> ConfigOutcome {
@@ -654,6 +662,44 @@ pub(crate) mod tests {
             // Escapes above the root and comes back down -- still a traversal attempt,
             // so it must be rejected even though the final depth looks non-negative.
             assert!(resolve_path_in_root("01AAA", "a/../../b").is_err());
+        });
+    }
+
+    #[test]
+    fn resolve_path_in_root_rejects_absolute_paths() {
+        with_xdg_config_home(|_| {
+            let root_dir = TempDir::new().unwrap();
+            let config = Config {
+                version: 1,
+                roots: vec![RootConfig {
+                    id: "01AAA".to_string(),
+                    path: root_dir.path().to_str().unwrap().to_string(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                }],
+            };
+            write_config(&config).unwrap();
+
+            assert!(resolve_path_in_root("01AAA", "/etc/passwd").is_err());
+        });
+    }
+
+    #[test]
+    fn resolve_path_in_root_rejects_backslash_traversal() {
+        with_xdg_config_home(|_| {
+            let root_dir = TempDir::new().unwrap();
+            let config = Config {
+                version: 1,
+                roots: vec![RootConfig {
+                    id: "01AAA".to_string(),
+                    path: root_dir.path().to_str().unwrap().to_string(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                }],
+            };
+            write_config(&config).unwrap();
+
+            assert!(resolve_path_in_root("01AAA", "..\\..\\secret").is_err());
         });
     }
 
