@@ -73,6 +73,24 @@ describe("NoteEditor", () => {
     expect(await screen.findByText("Loaded")).toBeDefined();
   });
 
+  it("shows a loading indicator while open_note is in flight, and hides it once content loads", async () => {
+    let resolveOpenNote: (result: { content: string; id: string; is_conflicted: boolean }) => void = () => {};
+    mockInvoke({
+      open_note: new Promise((resolve) => {
+        resolveOpenNote = resolve;
+      }),
+    });
+
+    render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+
+    expect(await screen.findByTestId("spinner")).toBeDefined();
+
+    resolveOpenNote({ content: "Loaded\n", id: "01LOADED", is_conflicted: false });
+
+    await screen.findByText("Loaded");
+    expect(screen.queryByTestId("spinner")).toBeNull();
+  });
+
   it("renders exactly one CodeMirror editor instance", async () => {
     const { container } = render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
 

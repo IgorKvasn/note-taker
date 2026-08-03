@@ -22,6 +22,16 @@
 
 .root-sync-indicator[data-sync-state="syncing"] .root-sync-indicator__dot {
   background-color: var(--accent-color, #4a90d9);
+  animation: root-sync-indicator-pulse var(--motion-slow) var(--ease-out) infinite alternate;
+}
+
+@keyframes root-sync-indicator-pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.35;
+  }
 }
 
 .root-sync-indicator[data-sync-state="conflict"] .root-sync-indicator__dot,

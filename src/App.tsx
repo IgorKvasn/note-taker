@@ -8,6 +8,7 @@ import { NoteEditor } from "./components/NoteEditor";
 import { NoticeStack } from "./components/NoticeStack";
 import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
+import { Spinner } from "./components/Spinner";
 import { SplitPane } from "./components/SplitPane";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { useUiState } from "./hooks/useUiState";
@@ -175,7 +176,11 @@ export function App() {
   }, []);
 
   if (configOutcome === null) {
-    return null;
+    return (
+      <div className="app app--boot">
+        <Spinner delayed label="Loading note-taker…" />
+      </div>
+    );
   }
 
   if (configOutcome.type === "missing") {

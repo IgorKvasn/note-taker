@@ -489,7 +489,7 @@ export function NotesPanel({
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [pendingRename, setPendingRename] = useState<PendingRename | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
-  const { query, results, setQuery, clear: clearSearch } = useSearch();
+  const { query, results, isSearching, setQuery, clear: clearSearch } = useSearch();
   const isSearchMode = results !== null;
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -752,7 +752,9 @@ export function NotesPanel({
           Refresh
         </button>
       </div>
-      {isSearchMode && <SearchResultsList results={results} roots={roots} onSelect={selectSearchResult} />}
+      {isSearchMode && (
+        <SearchResultsList results={results} roots={roots} isSearching={isSearching} onSelect={selectSearchResult} />
+      )}
       {/* Kept mounted (just hidden) rather than swapped out entirely while searching,
           so each RootSection's expand/collapse state survives clearing the query. */}
       <div hidden={isSearchMode}>
