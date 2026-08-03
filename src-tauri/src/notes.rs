@@ -243,9 +243,9 @@ pub fn move_item(repo_path: &Path, from_path: &Path, to_path: &Path) -> Result<(
     )
 }
 
-/// Strips a raw file's leading `---`-delimited YAML frontmatter block, keeping
-/// only the `id` extraction private to this module -- search (§8) needs the
-/// body without frontmatter but has no business reading the ID.
+/// Strips a raw file's leading `---`-delimited YAML frontmatter block. Search
+/// (§8) needs the body without frontmatter but has no business reading the ID;
+/// callers that do need it reach for `split_frontmatter` instead.
 pub fn strip_frontmatter(raw: &str) -> &str {
     split_frontmatter(raw).1
 }
@@ -254,7 +254,7 @@ pub fn strip_frontmatter(raw: &str) -> &str {
 /// body, returning the `id` field if the block exists and parses. Absence of a
 /// well-formed block (no delimiters, or no `id` key) is not an error -- it just
 /// means the caller backfills.
-fn split_frontmatter(raw: &str) -> (Option<String>, &str) {
+pub(crate) fn split_frontmatter(raw: &str) -> (Option<String>, &str) {
     let Some(after_open) = raw.strip_prefix("---\n") else {
         return (None, raw);
     };

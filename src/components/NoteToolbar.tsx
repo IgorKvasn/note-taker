@@ -1,9 +1,13 @@
+import { useState } from "react";
 import type { EditorView } from "@codemirror/view";
+import type { LinkedNote } from "../ipc";
+import { NoteLinkPicker } from "./NoteLinkPicker";
 import {
   insertCodeBlock,
   insertHorizontalRule,
   insertImage,
   insertLink,
+  insertNoteLink,
   insertTable,
   toggleBlockquote,
   toggleBulletList,
@@ -16,6 +20,8 @@ import "./NoteToolbar.css";
 
 interface NoteToolbarProps {
   view: EditorView | null;
+  /** Linkable notes in the current root; same-root only by design. */
+  linkableNotes?: LinkedNote[];
 }
 
 interface ToolbarButtonSpec {
@@ -72,7 +78,9 @@ const GROUPS: ToolbarButtonSpec[][] = [
   ],
 ];
 
-export function NoteToolbar({ view }: NoteToolbarProps) {
+export function NoteToolbar({ view, linkableNotes = [] }: NoteToolbarProps) {
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+
   return (
     <div className="note-toolbar" data-testid="note-toolbar">
       {GROUPS.map((group, groupIndex) => (
@@ -96,6 +104,33 @@ export function NoteToolbar({ view }: NoteToolbarProps) {
           ))}
         </div>
       ))}
+      <div className="note-toolbar__group">
+        <button
+          type="button"
+          className="note-toolbar__button"
+          title="Link to note"
+          disabled={view === null}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsPickerOpen(true)}
+        >
+          🔖
+        </button>
+      </div>
+      {isPickerOpen && (
+        <NoteLinkPicker
+          notes={linkableNotes}
+          onCancel={() => {
+            setIsPickerOpen(false);
+            view?.focus();
+          }}
+          onSelect={(note) => {
+            setIsPickerOpen(false);
+            if (view !== null) {
+              dispatchCommand(view, (target) => target.dispatch(insertNoteLink(target.state, note.title, note.id)));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

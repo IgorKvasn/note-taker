@@ -1,23 +1,56 @@
 import { useRef } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { copyToClipboard } from "./clipboard";
 import { Toast } from "./Toast";
 import { useToasts } from "../hooks/useToasts";
+import { BROKEN_NOTE_LINK_TITLE, NOTE_LINK_PROTOCOL, NOTE_LINK_SCHEME, noteLinkTarget } from "./noteLinks";
 import "./NoteView.css";
 
+/**
+ * Rendered notes are untrusted input -- they arrive by git from other machines
+ * (spec §9.2) -- so this widens `defaultSchema` by exactly two things: the
+ * `hljs` class names syntax highlighting needs, and the `note:` href protocol
+ * carrying a cross-note link's ULID. `src` is deliberately left alone, so
+ * `![alt](note:...)` stays blocked; only anchors may use the scheme.
+ */
 const SANITIZE_SCHEMA = {
   ...defaultSchema,
   attributes: {
     ...defaultSchema.attributes,
     span: [...(defaultSchema.attributes?.span ?? []), ["className", /^hljs/]],
   },
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), NOTE_LINK_SCHEME],
+  },
 };
+
+/**
+ * `react-markdown` blanks any URL outside its own hardcoded protocol list
+ * *before* rehype plugins run, so widening `SANITIZE_SCHEMA` alone is not
+ * enough to let a `note:` href through. This lets exactly that scheme past and
+ * defers every other URL to the stock transform.
+ *
+ * It applies to `src` as well as `href`, but nothing is widened by that:
+ * `SANITIZE_SCHEMA` still restricts `src` to http(s), so an
+ * `![alt](note:...)` image is stripped downstream.
+ */
+function transformUrl(url: string): string {
+  return url.startsWith(NOTE_LINK_PROTOCOL) ? url : defaultUrlTransform(url);
+}
 
 interface NoteViewProps {
   content: string;
+  /**
+   * Resolves a `note:` link's ULID to a path in the *same* root. Links are
+   * same-root only by design, so an ID absent from this map is treated as
+   * unresolvable rather than searched for elsewhere.
+   */
+  resolveNoteLink?: (id: string) => string | null;
+  onOpenNoteLink?: (path: string) => void;
 }
 
 interface CopyableBlockProps {
@@ -60,7 +93,54 @@ function CopyableBlock({ as: Tag, className, children, onCopy }: CopyableBlockPr
   );
 }
 
-export function NoteView({ content }: NoteViewProps) {
+interface NoteLinkProps {
+  href: string | undefined;
+  children: React.ReactNode;
+  resolveNoteLink: ((id: string) => string | null) | undefined;
+  onOpenNoteLink: ((path: string) => void) | undefined;
+}
+
+/**
+ * Renders an anchor, giving `note:` hrefs cross-note behaviour and leaving
+ * every other href exactly as it was.
+ *
+ * A `note:` link whose ULID resolves to nothing renders inert and visibly
+ * broken rather than merely failing on click: in a git-synced app an
+ * unresolvable target is a normal temporary state (not yet pulled, or in
+ * another root), so the user is better served seeing it at a glance.
+ */
+function NoteLink({ href, children, resolveNoteLink, onOpenNoteLink }: NoteLinkProps) {
+  const targetId = noteLinkTarget(href);
+  if (targetId === null) {
+    return <a href={href}>{children}</a>;
+  }
+
+  const path = resolveNoteLink?.(targetId) ?? null;
+  if (path === null) {
+    return (
+      <span className="note-view__broken-link" title={BROKEN_NOTE_LINK_TITLE} data-testid="broken-note-link">
+        {children}
+      </span>
+    );
+  }
+
+  return (
+    <a
+      className="note-view__note-link"
+      href={`${NOTE_LINK_PROTOCOL}${targetId}`}
+      data-testid="note-link"
+      onClick={(event) => {
+        // The href is not navigable by the webview; opening is ours to do.
+        event.preventDefault();
+        onOpenNoteLink?.(path);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+export function NoteView({ content, resolveNoteLink, onOpenNoteLink }: NoteViewProps) {
   const { toasts, showToast } = useToasts();
 
   return (
@@ -68,6 +148,7 @@ export function NoteView({ content }: NoteViewProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, SANITIZE_SCHEMA]]}
+        urlTransform={transformUrl}
         components={{
           pre: ({ className = "", children }) => (
             <CopyableBlock as="pre" className={className} onCopy={showToast}>
@@ -78,6 +159,11 @@ export function NoteView({ content }: NoteViewProps) {
             <CopyableBlock as="blockquote" className={className} onCopy={showToast}>
               {children}
             </CopyableBlock>
+          ),
+          a: ({ href, children }) => (
+            <NoteLink href={href} resolveNoteLink={resolveNoteLink} onOpenNoteLink={onOpenNoteLink}>
+              {children}
+            </NoteLink>
           ),
         }}
       >

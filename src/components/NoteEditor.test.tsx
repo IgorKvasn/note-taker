@@ -38,15 +38,25 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
     if (command === "mark_resolved") {
       return Promise.resolve(undefined);
     }
+    if (command === "scan_links") {
+      return Promise.resolve({ notes: [], backlinks: {} });
+    }
     throw new Error(`unexpected command ${command} with args ${JSON.stringify(args)}`);
   });
 }
 
-/** Fires a `sync-status` event through whichever handler NoteEditor registered. */
+/**
+ * Fires a `sync-status` event through every handler registered for it --
+ * NoteEditor's own conflict re-fetch and `useNoteLinks`' re-scan both listen,
+ * so picking a single call index would silently test the wrong subscriber.
+ */
 async function emitSyncStatus(payload: SyncStatusEvent) {
   await waitFor(() => expect(listen).toHaveBeenCalled());
-  const handler = listen.mock.calls[0][1] as (event: { payload: SyncStatusEvent }) => void;
-  handler({ payload });
+  for (const [event, handler] of listen.mock.calls) {
+    if (event === "sync-status") {
+      (handler as (event: { payload: SyncStatusEvent }) => void)({ payload });
+    }
+  }
 }
 
 describe("NoteEditor", () => {
@@ -204,7 +214,7 @@ describe("NoteEditor", () => {
 
     // No crash / no re-fetch of open_note for the same note+path.
     expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" });
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls.filter(([command]) => command === "open_note")).toHaveLength(1);
   });
 
   it("hides the formatting toolbar while in the rendered view", async () => {

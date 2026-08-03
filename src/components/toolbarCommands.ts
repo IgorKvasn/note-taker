@@ -1,4 +1,5 @@
 import { type ChangeSpec, EditorSelection, type EditorState, type Line, type TransactionSpec } from "@codemirror/state";
+import { formatNoteLink } from "./noteLinks";
 
 /** Wraps or, if already wrapped (markers just inside or outside the selection), unwraps `marker`. */
 export function toggleWrap(state: EditorState, marker: string): TransactionSpec {
@@ -150,6 +151,28 @@ export function insertLink(state: EditorState): TransactionSpec {
 /** Inserts `![alt](url)`, using the selection as the alt text and leaving the cursor on `url`. */
 export function insertImage(state: EditorState): TransactionSpec {
   return insertLinkLike(state, "!", "alt");
+}
+
+/**
+ * Inserts a cross-note link `[title](note:id)` for an already-chosen note,
+ * placing the cursor after it -- unlike `insertLink`, there is no `url`
+ * placeholder left to fill in.
+ *
+ * A selection becomes the label, matching `insertLink`, so linking selected
+ * prose reads naturally; the note's own title is only the fallback. The label
+ * is authored text and is never rewritten afterwards, even if the target is
+ * renamed.
+ */
+export function insertNoteLink(state: EditorState, title: string, id: string): TransactionSpec {
+  return state.changeByRange((range) => {
+    const label = state.sliceDoc(range.from, range.to) || title;
+    const insert = formatNoteLink(label, id);
+    const end = range.from + insert.length;
+    return {
+      changes: { from: range.from, to: range.to, insert },
+      range: EditorSelection.cursor(end),
+    };
+  });
 }
 
 /**

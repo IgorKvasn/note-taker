@@ -5,6 +5,7 @@ import {
   insertHorizontalRule,
   insertImage,
   insertLink,
+  insertNoteLink,
   insertTable,
   toggleBlockquote,
   toggleBulletList,
@@ -225,5 +226,33 @@ describe("insertCodeBlock", () => {
 
     expect(result.state.doc.toString()).toBe("intro\n```\n\n```");
     expect(result.state.selection.main.from).toBe("intro\n```\n".length);
+  });
+});
+
+describe("insertNoteLink", () => {
+  it("inserts a note link using the note's title when there is no selection", () => {
+    const state = stateWithSelection("see ", 4);
+
+    const result = state.update(insertNoteLink(state, "Architecture", "01ARCH"));
+
+    expect(result.state.doc.toString()).toBe("see [Architecture](note:01ARCH)");
+  });
+
+  it("leaves the cursor after the inserted link, with no placeholder selected", () => {
+    const state = stateWithSelection("", 0);
+
+    const result = state.update(insertNoteLink(state, "Architecture", "01ARCH"));
+
+    const inserted = "[Architecture](note:01ARCH)";
+    expect(result.state.selection.main.empty).toBe(true);
+    expect(result.state.selection.main.from).toBe(inserted.length);
+  });
+
+  it("uses the selection as the label, keeping the authored text", () => {
+    const state = stateWithSelection("see the design doc", 4, 18);
+
+    const result = state.update(insertNoteLink(state, "Architecture", "01ARCH"));
+
+    expect(result.state.doc.toString()).toBe("see [the design doc](note:01ARCH)");
   });
 });

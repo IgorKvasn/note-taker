@@ -216,7 +216,7 @@ fn search_note(title: &str, body: &str, query_lower: &str) -> Option<NoteMatch> 
 /// same traversal contract (spec §8). Unlike `list_tree`, unreadable
 /// subdirectories are skipped rather than erroring: one bad directory in one
 /// root must not blank out results from every other root.
-fn walk_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
+pub(crate) fn walk_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };

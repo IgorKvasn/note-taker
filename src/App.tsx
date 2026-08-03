@@ -210,6 +210,7 @@ export function App() {
               onModeChange={setEditorMode}
               onOpenError={handleOpenNoteError}
               scrollToOffset={openNote.scrollToOffset}
+              onOpenNoteLink={openNoteHandler}
             />
           )
         }

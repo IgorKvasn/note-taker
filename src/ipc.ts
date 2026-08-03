@@ -19,6 +19,7 @@ export const COMMAND_CREATE_FOLDER = "create_folder";
 export const COMMAND_DELETE_ITEM = "delete_item";
 export const COMMAND_MOVE_ITEM = "move_item";
 export const COMMAND_SEARCH_NOTES = "search_notes";
+export const COMMAND_SCAN_LINKS = "scan_links";
 export const COMMAND_GET_STATE = "get_state";
 export const COMMAND_SAVE_STATE = "save_state";
 export const COMMAND_SYNC_ROOT = "sync_root";
@@ -101,6 +102,24 @@ export interface SearchResult {
   snippet_matches: MatchRange[];
   first_match_offset: number | null;
   seq: number;
+}
+
+/** Mirrors `LinkedNote` in `src-tauri/src/links.rs`. */
+export interface LinkedNote {
+  id: string;
+  path: string;
+  directory_path: string;
+  title: string;
+}
+
+/**
+ * Mirrors `ScanLinksResult` in `src-tauri/src/links.rs`. `backlinks` maps a
+ * target note's ULID to the paths linking to it; it is populated by the backend
+ * but not yet read anywhere on this side.
+ */
+export interface ScanLinksResult {
+  notes: LinkedNote[];
+  backlinks: Record<string, string[]>;
 }
 
 /** Mirrors `LastOpenNote` in `src-tauri/src/state.rs`. */

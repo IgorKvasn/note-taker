@@ -1,5 +1,6 @@
 mod config;
 mod gitutil;
+mod links;
 mod notes;
 mod search;
 mod state;
@@ -15,6 +16,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_window_state::StateFlags;
 
 use config::{Config, ConfigOutcome, RootDraft, RootValidation};
+use links::ScanLinksResult;
 use notes::OpenNoteResult;
 use search::SearchResult;
 use state::UiState;
@@ -207,6 +209,16 @@ fn search_notes(query: String, seq: u64) -> Result<Vec<SearchResult>, String> {
     Ok(search::search_notes(&query, seq, &roots))
 }
 
+/// Scans one root for `note:` link data (spec §9.2 addressing: same-root only).
+/// Intentionally uncached on this side -- the frontend re-requests it on the
+/// events that already refresh the tree, so a `git pull` changing files behind
+/// the app's back cannot leave a stale backend map.
+#[tauri::command]
+fn scan_links(root_id: String) -> Result<ScanLinksResult, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    Ok(links::scan_links(&root_path))
+}
+
 #[tauri::command]
 fn get_state() -> UiState {
     state::get_state()
@@ -276,6 +288,7 @@ pub fn run() {
             get_root_status,
             mark_resolved,
             search_notes,
+            scan_links,
             get_state,
             save_state,
         ])

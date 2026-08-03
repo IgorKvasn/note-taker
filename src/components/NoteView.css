@@ -59,3 +59,15 @@
 .note-view blockquote:focus-within .copyable-block__copy-button {
   opacity: 1;
 }
+
+.note-view__note-link {
+  cursor: pointer;
+}
+
+/* A link whose target is not in this root: struck through and muted so it
+   reads as broken at a glance, and inert so clicking it does nothing. */
+.note-view__broken-link {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  cursor: default;
+}

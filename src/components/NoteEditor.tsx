@@ -18,6 +18,7 @@ import { markdownLivePreview } from "./markdownLivePreview";
 import { noteEditorKeymap } from "./noteEditorKeymap";
 import { NoteToolbar } from "./NoteToolbar";
 import { NoteView } from "./NoteView";
+import { useNoteLinks } from "../hooks/useNoteLinks";
 import "./NoteEditor.css";
 
 /** Debounce window between the last keystroke and the autosave `save_note` call. */
@@ -66,6 +67,12 @@ interface NoteEditorProps {
    * repeat clicks on the same result for the same open note.
    */
   scrollToOffset?: number;
+  /**
+   * Opens another note in the same root, for clicks on a `note:` cross-link
+   * (issue #49). Takes a root-relative path, matching the addressing every
+   * other command uses (spec §9.2).
+   */
+  onOpenNoteLink?: (rootId: string, path: string) => void;
 }
 
 /**
@@ -74,7 +81,16 @@ interface NoteEditorProps {
  * straight against this view, and a wrapper library would be an abstraction
  * to reach through (spec §1, §5).
  */
-export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scrollToOffset }: NoteEditorProps) {
+export function NoteEditor({
+  rootId,
+  path,
+  mode,
+  onModeChange,
+  onOpenError,
+  scrollToOffset,
+  onOpenNoteLink,
+}: NoteEditorProps) {
+  const { linkableNotes, resolveNoteLink } = useNoteLinks(rootId);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -286,7 +302,7 @@ export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scro
   return (
     <div className="note-editor">
       <div className="note-editor__chrome">
-        {mode === "edit" && <NoteToolbar view={view} />}
+        {mode === "edit" && <NoteToolbar view={view} linkableNotes={linkableNotes} />}
         {isConflicted && (
           <button type="button" className="note-editor__mark-resolved" onClick={markResolved}>
             Mark resolved
@@ -317,7 +333,13 @@ export function NoteEditor({ rootId, path, mode, onModeChange, onOpenError, scro
           ref={hostRef}
           hidden={mode !== "edit"}
         />
-        {mode === "view" && <NoteView content={content} />}
+        {mode === "view" && (
+          <NoteView
+            content={content}
+            resolveNoteLink={resolveNoteLink}
+            onOpenNoteLink={(targetPath) => onOpenNoteLink?.(rootId, targetPath)}
+          />
+        )}
       </div>
     </div>
   );
