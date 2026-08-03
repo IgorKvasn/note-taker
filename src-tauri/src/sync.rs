@@ -19,7 +19,7 @@ use crate::gitutil::{run_git, run_git_expecting_success, stderr_of};
 pub const EVENT_SYNC_STATUS: &str = "sync-status";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "state", rename_all = "lowercase")]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum SyncState {
     Syncing,
     Synced,
@@ -375,6 +375,31 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
+
+    /// The frontend's `SyncState` union (`src/ipc.ts`) matches on these exact
+    /// tag strings, so the serde renaming is part of the IPC contract rather
+    /// than an internal detail: `rename_all = "lowercase"` would silently emit
+    /// `localonly` for the multi-word variant and no frontend arm would match.
+    #[test]
+    fn sync_state_serializes_with_the_tags_the_frontend_matches_on() {
+        let tag_of = |state: &SyncState| {
+            serde_json::to_value(state).unwrap()["state"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+
+        assert_eq!(tag_of(&SyncState::Syncing), "syncing");
+        assert_eq!(tag_of(&SyncState::Synced), "synced");
+        assert_eq!(tag_of(&SyncState::LocalOnly), "local_only");
+        assert_eq!(tag_of(&SyncState::Conflict), "conflict");
+        assert_eq!(
+            tag_of(&SyncState::Error {
+                stderr: "boom".into()
+            }),
+            "error"
+        );
+    }
 
     /// A bare repo's HEAD follows `init.defaultBranch`, so on a host defaulting
     /// to `master` it would point at a ref these tests never push, leaving

@@ -123,7 +123,7 @@ export interface UiState {
 
 /**
  * Mirrors `SyncState` in `src-tauri/src/sync.rs`, serialized as an
- * externally-tagged enum via `#[serde(tag = "state", rename_all = "lowercase")]`.
+ * externally-tagged enum via `#[serde(tag = "state", rename_all = "snake_case")]`.
  */
 export type SyncState =
   | { state: "syncing" }
