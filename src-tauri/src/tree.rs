@@ -39,6 +39,14 @@ fn read_dir_sorted(absolute_dir: &Path, relative_dir: &str) -> Result<Vec<TreeNo
         }
 
         let file_type = entry.file_type().map_err(|error| error.to_string())?;
+
+        // Symlinks are never followed, matching search's skip rule (§8 of the
+        // spec) explicitly rather than relying on `file_type()`'s use of
+        // `lstat` to make `is_dir()` false for a symlinked directory.
+        if file_type.is_symlink() {
+            continue;
+        }
+
         let relative_path = if relative_dir.is_empty() {
             name.clone()
         } else {
@@ -166,6 +174,44 @@ mod tests {
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].name, "empty-folder");
         assert!(tree[0].children.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlinked_directories_are_not_listed_or_recursed_into() {
+        let temp_dir = TempDir::new().unwrap();
+        let target_dir = TempDir::new().unwrap();
+        write_file(target_dir.path(), "nested.md");
+        write_file(temp_dir.path(), "visible.md");
+        std::os::unix::fs::symlink(target_dir.path(), temp_dir.path().join("linked-folder"))
+            .unwrap();
+
+        let tree = list_tree(temp_dir.path()).unwrap();
+
+        assert_eq!(tree.len(), 1, "the symlinked folder must not be listed");
+        assert_eq!(tree[0].name, "visible.md");
+        assert!(
+            tree.iter().all(|node| node.name != "nested.md"),
+            "a file only reachable through the symlink must never appear in the tree"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlinked_markdown_files_are_not_listed() {
+        let temp_dir = TempDir::new().unwrap();
+        write_file(temp_dir.path(), "real-target.md");
+        write_file(temp_dir.path(), "visible.md");
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("real-target.md"),
+            temp_dir.path().join("link.md"),
+        )
+        .unwrap();
+
+        let tree = list_tree(temp_dir.path()).unwrap();
+        let names: Vec<&str> = tree.iter().map(|node| node.name.as_str()).collect();
+
+        assert_eq!(names, vec!["real-target.md", "visible.md"]);
     }
 
     #[test]
