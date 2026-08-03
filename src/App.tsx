@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AboutModal } from "./components/AboutModal";
+import { ChangelogModal } from "./components/ChangelogModal";
 import { LocalOnlyNotice } from "./components/LocalOnlyNotice";
 import { NoteEditor } from "./components/NoteEditor";
 import { NoticeStack } from "./components/NoticeStack";
@@ -43,8 +44,9 @@ export function App() {
   } = useUiState();
   const hasRestoredOpenNote = useRef(false);
   const [showLocalOnlyNotice, setShowLocalOnlyNotice] = useState(false);
-  const [availableUpdate, setAvailableUpdate] = useState<ReleaseInfo | null>(null);
+  const [availableUpdates, setAvailableUpdates] = useState<ReleaseInfo[]>([]);
   const [isUpdateNoticeDismissed, setIsUpdateNoticeDismissed] = useState(false);
+  const [isChangelogOpen, setIsChangelogOpen] = useState(false);
 
   const openNoteHandler = useCallback(
     (rootId: string, path: string, scrollToOffset?: number) => {
@@ -96,8 +98,8 @@ export function App() {
   // empty list), but `.catch` keeps this robust if the IPC call itself fails.
   useEffect(() => {
     invoke<ReleaseInfo[]>(COMMAND_CHECK_FOR_UPDATE)
-      .then((releases) => setAvailableUpdate(releases?.[0] ?? null))
-      .catch(() => setAvailableUpdate(null));
+      .then((releases) => setAvailableUpdates(releases ?? []))
+      .catch(() => setAvailableUpdates([]));
   }, []);
 
   // Restores the last-open note once both the config and persisted UI state have
@@ -158,6 +160,8 @@ export function App() {
   }, [dismissLocalOnlyNotice]);
 
   const dismissUpdateNotice = useCallback(() => setIsUpdateNoticeDismissed(true), []);
+  const showChangelog = useCallback(() => setIsChangelogOpen(true), []);
+  const closeChangelog = useCallback(() => setIsChangelogOpen(false), []);
 
   const handleOpenNoteError = useCallback(() => setOpenNote(null), []);
   const handleNoteDeleted = useCallback(() => setOpenNote(null), []);
@@ -234,6 +238,7 @@ export function App() {
         }
       />
       <AboutModal isOpen={isAboutOpen} version={version} onClose={closeAbout} />
+      <ChangelogModal isOpen={isChangelogOpen} releases={availableUpdates} onClose={closeChangelog} />
       {isSettingsOpen && (
         <div className="settings-backdrop" data-testid="settings-backdrop">
           <div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -249,8 +254,12 @@ export function App() {
       )}
       <NoticeStack>
         {showLocalOnlyNotice && <LocalOnlyNotice onDismiss={dismissNotice} />}
-        {availableUpdate !== null && !isUpdateNoticeDismissed && (
-          <UpdateNotice version={availableUpdate.version} onDismiss={dismissUpdateNotice} />
+        {availableUpdates.length > 0 && !isUpdateNoticeDismissed && (
+          <UpdateNotice
+            version={availableUpdates[0].version}
+            onDismiss={dismissUpdateNotice}
+            onShowChangelog={showChangelog}
+          />
         )}
       </NoticeStack>
     </div>

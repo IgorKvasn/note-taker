@@ -6,9 +6,11 @@ import { EVENT_MENU_ABOUT, EVENT_MENU_SETTINGS, type Config, type ConfigOutcome 
 
 const invoke = vi.hoisted(() => vi.fn());
 const listen = vi.hoisted(() => vi.fn());
+const openUrl = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 
 const EMPTY_CONFIG: Config = { version: 1, roots: [{ id: "01ROOT", path: "/notes", auto_sync: false, remote_url: "" }] };
 
@@ -445,6 +447,33 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
     expect(screen.queryByText("v0.7.0 available")).toBeNull();
+  });
+
+  it("opens the changelog modal listing every newer release from What's new, and it stays reachable after closing", async () => {
+    mockInvoke({
+      check_for_update: [
+        { version: "v0.8.0", notes: "- newest", url: "https://github.com/IgorKvasn/note-taker/releases/tag/v0.8.0" },
+        { version: "v0.7.0", notes: "- older", url: "https://github.com/IgorKvasn/note-taker/releases/tag/v0.7.0" },
+      ],
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+    await screen.findByText("v0.8.0 available");
+
+    await userEvent.click(screen.getByRole("button", { name: "What's new" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "What's new" });
+    const headings = within(dialog)
+      .getAllByRole("heading", { level: 3 })
+      .map((heading) => heading.textContent);
+    expect(headings).toEqual(["v0.8.0", "v0.7.0"]);
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByText("v0.8.0 available")).toBeDefined();
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("v0.8.0 available")).toBeNull();
   });
 
   it("stacks the update notice above the local-only notice when both are showing", async () => {

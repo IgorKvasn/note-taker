@@ -5,7 +5,7 @@ import { UpdateNotice } from "./UpdateNotice";
 
 describe("UpdateNotice", () => {
   it("names the available version with role=status", () => {
-    render(<UpdateNotice version="v0.7.0" onDismiss={() => {}} />);
+    render(<UpdateNotice version="v0.7.0" onDismiss={() => {}} onShowChangelog={() => {}} />);
 
     const notice = screen.getByRole("status");
     expect(notice.textContent).toContain("v0.7.0 available");
@@ -13,18 +13,19 @@ describe("UpdateNotice", () => {
 
   it("calls onDismiss when the dismiss button is clicked", async () => {
     const onDismiss = vi.fn();
-    render(<UpdateNotice version="v0.7.0" onDismiss={onDismiss} />);
+    render(<UpdateNotice version="v0.7.0" onDismiss={onDismiss} onShowChangelog={() => {}} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
-  it("renders a What's new control that is reachable but does not throw when clicked", async () => {
-    render(<UpdateNotice version="v0.7.0" onDismiss={() => {}} />);
+  it("calls onShowChangelog when the What's new button is clicked", async () => {
+    const onShowChangelog = vi.fn();
+    render(<UpdateNotice version="v0.7.0" onDismiss={() => {}} onShowChangelog={onShowChangelog} />);
 
     await userEvent.click(screen.getByRole("button", { name: "What's new" }));
 
-    expect(screen.getByRole("status")).toBeDefined();
+    expect(onShowChangelog).toHaveBeenCalledOnce();
   });
 });

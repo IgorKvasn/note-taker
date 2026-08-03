@@ -1,0 +1,68 @@
+.changelog-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgb(15 23 42 / 45%);
+  z-index: 10;
+}
+
+.changelog-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 90vw);
+  max-height: 80vh;
+  padding: 24px;
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+  box-shadow: 0 18px 40px rgb(15 23 42 / 28%);
+}
+
+.changelog-dialog__title {
+  margin: 0 0 16px;
+  font-size: 1.15rem;
+}
+
+.changelog-dialog__releases {
+  overflow-y: auto;
+  margin-bottom: 20px;
+}
+
+.changelog-dialog__release {
+  margin-bottom: 20px;
+}
+
+.changelog-dialog__release:last-child {
+  margin-bottom: 0;
+}
+
+.changelog-dialog__release h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.changelog-dialog__no-notes {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.changelog-dialog__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.changelog-dialog__actions button {
+  flex: 1;
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-sunken);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.changelog-dialog__actions button:hover {
+  background-color: var(--surface-hover);
+}

@@ -264,6 +264,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         // FULLSCREEN is deliberately excluded: quitting while fullscreen would reopen
         // fullscreen with no way to reach the GTK menubar. SIZE skips recording while
         // maximized, so MAXIMIZED restores maximized while keeping the restored-down size.
