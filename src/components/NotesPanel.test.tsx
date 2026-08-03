@@ -211,6 +211,14 @@ describe("NotesPanel", () => {
     expect(onExpandedPathsChange).toHaveBeenCalledWith(ROOT_A.id, []);
   });
 
+  it("shows a muted placeholder when a root's tree loads successfully but is empty", async () => {
+    mockTrees({ [ROOT_A.id]: [] });
+    render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
+
+    expect(await screen.findByText("This folder is empty")).toBeDefined();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("does not crash when a root is missing or unreadable", async () => {
     mockTrees({ [ROOT_A.id]: new Error("No such file or directory (os error 2)") });
     render(<NotesPanel roots={[ROOT_A]} onOpenNote={noop} />);
