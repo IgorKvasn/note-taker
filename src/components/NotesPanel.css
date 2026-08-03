@@ -3,6 +3,21 @@
   flex-direction: column;
   height: 100%;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+.notes-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.notes-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.notes-panel::-webkit-scrollbar-thumb {
+  background-color: var(--border-color);
+  border-radius: 4px;
 }
 
 .notes-panel__toolbar {
@@ -112,6 +127,7 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-out);
 }
 
 .notes-panel__item:hover {
@@ -121,6 +137,12 @@
 .notes-panel__item[data-selected] {
   background-color: var(--surface-hover);
   font-weight: 600;
+}
+
+.notes-panel__item:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: -2px;
+  transition: outline-color var(--motion-fast) var(--ease-out);
 }
 
 .notes-panel__item[data-drag-over] {
@@ -146,6 +168,13 @@
   margin: 0;
   padding: 8px;
   color: var(--danger-color);
+  font-size: 0.85rem;
+}
+
+.notes-panel__empty {
+  margin: 0;
+  padding: 8px;
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 

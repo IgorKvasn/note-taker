@@ -422,7 +422,10 @@ function RootSection({
               Couldn't read this folder: {error}
             </p>
           )}
-          {error === null && tree !== null && (
+          {error === null && tree !== null && tree.length === 0 && !pendingAtTopLevel && (
+            <p className="notes-panel__empty">This folder is empty</p>
+          )}
+          {error === null && tree !== null && (tree.length > 0 || pendingAtTopLevel) && (
             <ul className="notes-panel__list">
               {tree.map((node) => (
                 <TreeNodeView
