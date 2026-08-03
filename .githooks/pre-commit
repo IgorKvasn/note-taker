@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#
+# Runs the fast, deterministic subset of CI (.github/workflows/ci.yml) so that
+# formatting and type errors are caught before they reach a pipeline run.
+# Clippy and the two test suites are deliberately left to CI: at ~20s+ each they
+# are slow enough that the hook would routinely be bypassed with --no-verify.
+#
+# Enable with:  git config core.hooksPath .githooks
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+failed=0
+
+# Only check languages whose files are actually part of this commit, so a
+# docs-only or frontend-only commit does not pay for the Rust toolchain.
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+if grep -q '^src-tauri/.*\.rs$' <<<"$staged_files"; then
+  echo "pre-commit: cargo fmt --all --check"
+  if ! (cd "$repo_root/src-tauri" && cargo fmt --all --check); then
+    echo "pre-commit: rustfmt found unformatted code; run 'cargo fmt --all' in src-tauri/" >&2
+    failed=1
+  fi
+fi
+
+if grep -qE '^(src/|.*\.(ts|tsx))' <<<"$staged_files"; then
+  echo "pre-commit: npm run typecheck"
+  if ! (cd "$repo_root" && npm run --silent typecheck); then
+    echo "pre-commit: typecheck failed" >&2
+    failed=1
+  fi
+fi
+
+if [ "$failed" -ne 0 ]; then
+  echo "pre-commit: checks failed; commit aborted (use --no-verify to override)" >&2
+  exit 1
+fi
