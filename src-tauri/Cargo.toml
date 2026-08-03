@@ -1,6 +1,6 @@
 [package]
 name = "note-taker"
-version = "0.5.2"
+version = "0.6.0"
 description = "Markdown notes in git-synced folders"
 authors = ["Igor Kvasnicka"]
 edition = "2021"
