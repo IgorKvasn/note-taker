@@ -42,6 +42,7 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
     if (command === "get_root_status") {
       return Promise.resolve({ conflicted_paths: [], sync_state: { state: "local_only" } });
     }
+    if (command === "check_for_update") return Promise.resolve([]);
     return Promise.resolve(undefined);
   });
 }
@@ -266,6 +267,7 @@ describe("App", () => {
       }
       if (command === "get_app_version") return Promise.resolve("0.1.0");
       if (command === "get_config") return Promise.resolve({ type: "ok", config: EMPTY_CONFIG } satisfies ConfigOutcome);
+      if (command === "check_for_update") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
     render(<App />);
@@ -399,5 +401,81 @@ describe("App", () => {
     }
 
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("renders nothing update-related when the app is up to date", async () => {
+    mockInvoke({ check_for_update: [] });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_update"));
+    expect(screen.queryByText(/available/i)).toBeNull();
+  });
+
+  it("shows a bottom-right card naming the version when a newer release exists", async () => {
+    mockInvoke({
+      check_for_update: [{ version: "v0.7.0", notes: "notes", url: "https://example.com/v0.7.0" }],
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    const notice = await screen.findByText("v0.7.0 available");
+    expect(notice.closest("[role='status']")).not.toBeNull();
+  });
+
+  it("renders no notice, error, toast, or dialog when the update check fails", async () => {
+    mockInvoke({ check_for_update: Promise.reject(new Error("network error")) });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_update"));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("dismisses the update notice for the remainder of the session", async () => {
+    mockInvoke({
+      check_for_update: [{ version: "v0.7.0", notes: "notes", url: "https://example.com/v0.7.0" }],
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await screen.findByText("v0.7.0 available");
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(screen.queryByText("v0.7.0 available")).toBeNull();
+  });
+
+  it("stacks the update notice above the local-only notice when both are showing", async () => {
+    mockInvoke({
+      check_for_update: [{ version: "v0.7.0", notes: "notes", url: "https://example.com/v0.7.0" }],
+      get_state: {
+        split_ratio: 0.28,
+        last_open_note: null,
+        expanded_paths: {},
+        has_dismissed_local_only_notice: false,
+        editor_mode: "edit",
+      },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await waitFor(() => expect(listen).toHaveBeenCalledWith("sync-status", expect.any(Function)));
+    const registrations = listen.mock.calls.filter(([name]) => name === "sync-status");
+    await waitFor(() => {
+      for (const [, handler] of registrations) {
+        (handler as (event: { payload: unknown }) => void)({
+          payload: { root_id: "01ROOT", state: { state: "local_only" } },
+        });
+      }
+    });
+
+    await screen.findByText("v0.7.0 available");
+    const stack = screen.getByTestId("notice-stack");
+    const statuses = within(stack).getAllByRole("status");
+    expect(statuses).toHaveLength(2);
+    expect(statuses[0].textContent).toMatch(/local/i);
+    expect(statuses[1].textContent).toContain("v0.7.0 available");
   });
 });

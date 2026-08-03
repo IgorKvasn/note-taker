@@ -8,9 +8,11 @@ import { NoticeStack } from "./components/NoticeStack";
 import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { SplitPane } from "./components/SplitPane";
+import { UpdateNotice } from "./components/UpdateNotice";
 import { useUiState } from "./hooks/useUiState";
 import { isDescendantPath } from "./paths";
 import {
+  COMMAND_CHECK_FOR_UPDATE,
   COMMAND_GET_APP_VERSION,
   COMMAND_GET_CONFIG,
   COMMAND_SHOW_CONFIG_ERROR,
@@ -19,6 +21,7 @@ import {
   EVENT_SYNC_STATUS,
   type Config,
   type ConfigOutcome,
+  type ReleaseInfo,
   type SyncStatusEvent,
 } from "./ipc";
 import "./App.css";
@@ -40,6 +43,8 @@ export function App() {
   } = useUiState();
   const hasRestoredOpenNote = useRef(false);
   const [showLocalOnlyNotice, setShowLocalOnlyNotice] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<ReleaseInfo | null>(null);
+  const [isUpdateNoticeDismissed, setIsUpdateNoticeDismissed] = useState(false);
 
   const openNoteHandler = useCallback(
     (rootId: string, path: string, scrollToOffset?: number) => {
@@ -84,6 +89,15 @@ export function App() {
     invoke<string>(COMMAND_GET_APP_VERSION)
       .then(setVersion)
       .catch(() => setVersion(null));
+  }, []);
+
+  // Update check (issue #53): fired once at startup, never blocking initial
+  // render. `check_for_update` never rejects (backend fails silently to an
+  // empty list), but `.catch` keeps this robust if the IPC call itself fails.
+  useEffect(() => {
+    invoke<ReleaseInfo[]>(COMMAND_CHECK_FOR_UPDATE)
+      .then((releases) => setAvailableUpdate(releases?.[0] ?? null))
+      .catch(() => setAvailableUpdate(null));
   }, []);
 
   // Restores the last-open note once both the config and persisted UI state have
@@ -142,6 +156,8 @@ export function App() {
     setShowLocalOnlyNotice(false);
     dismissLocalOnlyNotice();
   }, [dismissLocalOnlyNotice]);
+
+  const dismissUpdateNotice = useCallback(() => setIsUpdateNoticeDismissed(true), []);
 
   const handleOpenNoteError = useCallback(() => setOpenNote(null), []);
   const handleNoteDeleted = useCallback(() => setOpenNote(null), []);
@@ -231,7 +247,12 @@ export function App() {
           </div>
         </div>
       )}
-      <NoticeStack>{showLocalOnlyNotice && <LocalOnlyNotice onDismiss={dismissNotice} />}</NoticeStack>
+      <NoticeStack>
+        {showLocalOnlyNotice && <LocalOnlyNotice onDismiss={dismissNotice} />}
+        {availableUpdate !== null && !isUpdateNoticeDismissed && (
+          <UpdateNotice version={availableUpdate.version} onDismiss={dismissUpdateNotice} />
+        )}
+      </NoticeStack>
     </div>
   );
 }
