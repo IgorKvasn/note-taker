@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the .deb via Tauri's bundler. Releases must be built on Ubuntu 26.04,
-# the only supported release; see README.md for why.
+# the only supported release; see docs/development.md for why.
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
