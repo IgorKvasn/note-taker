@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AboutModal } from "./components/AboutModal";
 import { ChangelogModal } from "./components/ChangelogModal";
 import { LocalOnlyNotice } from "./components/LocalOnlyNotice";
-import { NoteEditor } from "./components/NoteEditor";
 import { NoticeStack } from "./components/NoticeStack";
 import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
@@ -27,6 +26,14 @@ import {
   type SyncStatusEvent,
 } from "./ipc";
 import "./App.css";
+
+// Code-split: CodeMirror and its markdown grammar are the single largest thing
+// the frontend loads, and a launch that restores no note never needs them. The
+// import starts as soon as a note is opened; `Spinner` covers the gap, which is
+// a local-disk read in a packaged app.
+const NoteEditor = lazy(() =>
+  import("./components/NoteEditor").then((module) => ({ default: module.NoteEditor })),
+);
 
 export function App() {
   const [version, setVersion] = useState<string | null>(null);
@@ -229,16 +236,24 @@ export function App() {
               <p>No note open</p>
             </div>
           ) : (
-            <NoteEditor
-              key={`${openNote.rootId}:${openNote.path}`}
-              rootId={openNote.rootId}
-              path={openNote.path}
-              mode={uiState.editor_mode}
-              onModeChange={setEditorMode}
-              onOpenError={handleOpenNoteError}
-              scrollToOffset={openNote.scrollToOffset}
-              onOpenNoteLink={openNoteHandler}
-            />
+            <Suspense
+              fallback={
+                <div className="pane pane--placeholder">
+                  <Spinner delayed label="Opening note…" />
+                </div>
+              }
+            >
+              <NoteEditor
+                key={`${openNote.rootId}:${openNote.path}`}
+                rootId={openNote.rootId}
+                path={openNote.path}
+                mode={uiState.editor_mode}
+                onModeChange={setEditorMode}
+                onOpenError={handleOpenNoteError}
+                scrollToOffset={openNote.scrollToOffset}
+                onOpenNoteLink={openNoteHandler}
+              />
+            </Suspense>
           )
         }
       />

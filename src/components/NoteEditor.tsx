@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Annotation, EditorState } from "@codemirror/state";
@@ -17,11 +17,15 @@ import {
 import { markdownLivePreview } from "./markdownLivePreview";
 import { noteEditorKeymap } from "./noteEditorKeymap";
 import { NoteToolbar } from "./NoteToolbar";
-import { NoteView } from "./NoteView";
 import { BacklinksSection } from "./BacklinksSection";
 import { useNoteLinks } from "../hooks/useNoteLinks";
 import { Spinner } from "./Spinner";
 import "./NoteEditor.css";
+
+// Code-split alongside the editor itself: the markdown renderer and its syntax
+// highlighter are only reachable in preview mode, so an edit-only session never
+// pays for them.
+const NoteView = lazy(() => import("./NoteView").then((module) => ({ default: module.NoteView })));
 
 /** Debounce window between the last keystroke and the autosave `save_note` call. */
 const AUTOSAVE_DEBOUNCE_MS = 600;
@@ -354,11 +358,13 @@ export function NoteEditor({
           hidden={mode !== "edit"}
         />
         {mode === "view" && (
-          <NoteView
-            content={content}
-            resolveNoteLink={resolveNoteLink}
-            onOpenNoteLink={(targetPath) => onOpenNoteLink?.(rootId, targetPath)}
-          />
+          <Suspense fallback={<Spinner delayed label="Loading preview…" />}>
+            <NoteView
+              content={content}
+              resolveNoteLink={resolveNoteLink}
+              onOpenNoteLink={(targetPath) => onOpenNoteLink?.(rootId, targetPath)}
+            />
+          </Suspense>
         )}
       </div>
       {backlinkEntries.length > 0 && (
