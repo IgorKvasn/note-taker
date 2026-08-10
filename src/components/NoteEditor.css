@@ -91,6 +91,11 @@
   height: 100%;
 }
 
+.note-editor__body[data-drag-over] {
+  outline: 2px solid var(--accent-color, currentColor);
+  outline-offset: -2px;
+}
+
 .cm-live-preview-marker {
   color: var(--text-muted);
 }

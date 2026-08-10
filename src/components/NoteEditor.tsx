@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Annotation, EditorState, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -18,6 +19,7 @@ import {
   type SyncStatusEvent,
 } from "../ipc";
 import { attachmentTarget, formatAttachment } from "./attachments";
+import { handleAttachmentDrop, isWithinRect } from "./attachmentDrop";
 import { handleAttachmentPaste } from "./attachmentPaste";
 import { markdownLivePreview } from "./markdownLivePreview";
 import { noteEditorKeymap } from "./noteEditorKeymap";
@@ -340,6 +342,7 @@ export function NoteEditor({
 }: NoteEditorProps) {
   const { linkableNotes, resolveNoteLink, getBacklinks } = useNoteLinks(rootId);
   const hostRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Read once the initial `open_note` resolves, inside the mount effect below --
@@ -371,6 +374,9 @@ export function NoteEditor({
   // backfills one), used to look up who links here (issue #50).
   const [noteId, setNoteId] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  // Hover affordance for the native drag-drop event (issue #78): true only
+  // while a drag is over the editor pane specifically, not the whole webview.
+  const [isDragOver, setIsDragOver] = useState(false);
   // Disables the toolbar's image button for the duration of a pick+write, in
   // addition to the existing view === null rule (issue #75) -- a second click
   // mid-write would otherwise fire a second file dialog on top of the first.
@@ -563,6 +569,52 @@ export function NoteEditor({
     };
   }, [rootId, path]);
 
+  // Drag-and-drop (issue #78): handled exclusively via Tauri's native,
+  // webview-scoped drag-drop event -- never DOM dragover/drop listeners --
+  // since that's the only way to get real file paths for `import_attachment`
+  // rather than opaque `File` blobs. Because the event fires regardless of
+  // which pane the pointer is over, every event is hit-tested against the
+  // editor pane's bounds inside `handleAttachmentDrop`, so hovering or
+  // dropping over the notes tree is a no-op here and doesn't interfere with
+  // the tree's own DOM-based move-drag handling.
+  useEffect(() => {
+    const pendingUnlisten = getCurrentWebview().onDragDropEvent((event) => {
+      const body = bodyRef.current;
+      const view = viewRef.current;
+      if (body === null || view === null) {
+        return;
+      }
+
+      if (event.payload.type === "leave") {
+        setIsDragOver(false);
+        return;
+      }
+
+      // The event reports device pixels; getBoundingClientRect/posAtCoords
+      // both operate in CSS pixels, so the position must be converted before
+      // any hit-testing or coordinate-to-editor-offset lookup.
+      const scaleFactor = window.devicePixelRatio || 1;
+      const logicalPosition = event.payload.position.toLogical(scaleFactor);
+      const rect = body.getBoundingClientRect();
+      const isOver = isWithinRect(logicalPosition, rect);
+
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        setIsDragOver(isOver);
+        return;
+      }
+
+      // event.payload.type === "drop"
+      setIsDragOver(false);
+      handleAttachmentDrop(event.payload.paths, logicalPosition, view, rect, rootId, {
+        onImportError: (message) => setAttachmentError(message),
+      });
+    });
+
+    return () => {
+      pendingUnlisten.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [rootId]);
+
   const backlinkEntries = noteId === null ? [] : getBacklinks(noteId);
 
   const markResolved = useCallback(() => {
@@ -661,7 +713,7 @@ export function NoteEditor({
           Could not attach image: {attachmentError}
         </p>
       )}
-      <div className="note-editor__body">
+      <div className="note-editor__body" ref={bodyRef} data-drag-over={isDragOver || undefined}>
         {isLoading && (
           <div className="note-editor__loading">
             <Spinner delayed label="Opening note…" />

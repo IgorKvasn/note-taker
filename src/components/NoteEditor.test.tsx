@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { act, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,8 +8,10 @@ import type { EditorMode, ScanLinksResult, SyncStatusEvent } from "../ipc";
 
 const invoke = vi.hoisted(() => vi.fn());
 const listen = vi.hoisted(() => vi.fn());
+const onDragDropEvent = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
+vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent }) }));
 
 /**
  * Mirrors how `App.tsx` owns `mode` via `useUiState` (issue #37): `NoteEditor`
@@ -68,6 +70,7 @@ describe("NoteEditor", () => {
     vi.clearAllMocks();
     mockInvoke();
     listen.mockResolvedValue(() => {});
+    onDragDropEvent.mockResolvedValue(() => {});
   });
 
   it("loads the note's content via open_note and renders it in the editor", async () => {
@@ -1126,6 +1129,72 @@ describe("NoteEditor", () => {
         expect.stringContaining("not a recognized image format"),
       );
       expect(editable.textContent).toBe("Loaded");
+    });
+  });
+
+  describe("drag-and-drop attaches an image (issue #78)", () => {
+    /** Grabs the handler `NoteEditor` registered via the mocked
+     * `getCurrentWebview().onDragDropEvent`, so a test can fire native-shaped
+     * `DragDropEvent` payloads directly -- there's no real webview/native
+     * event in jsdom to dispatch this through. */
+    function dragDropHandler() {
+      const call = onDragDropEvent.mock.calls.at(-1);
+      if (call === undefined) {
+        throw new Error("onDragDropEvent was never registered");
+      }
+      return call[0] as (event: { payload: unknown }) => void;
+    }
+
+    /** A `PhysicalPosition`-shaped stand-in with the one method the drop
+     * handler calls -- `toLogical` is a no-op 1:1 conversion here since
+     * `window.devicePixelRatio` in jsdom is 1. */
+    function physicalPosition(x: number, y: number) {
+      return { toLogical: () => ({ x, y }) };
+    }
+
+    it("shows the hover affordance while a drag is over the editor pane, and hides it on drop", async () => {
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+      const handler = dragDropHandler();
+      const body = document.querySelector(".note-editor__body") as HTMLElement;
+      // jsdom's layout engine always reports a zero-sized rect regardless of
+      // CSS, so it's stubbed here to give the position-vs-bounds hit test
+      // something real to check against.
+      body.getBoundingClientRect = () => ({ left: 0, top: 0, right: 800, bottom: 600 }) as DOMRect;
+
+      act(() => handler({ payload: { type: "enter", paths: [], position: physicalPosition(10, 10) } }));
+      expect(body.getAttribute("data-drag-over")).toBe("true");
+
+      act(() => handler({ payload: { type: "leave" } }));
+      expect(body.getAttribute("data-drag-over")).toBeNull();
+    });
+
+    it("imports a dropped file and inserts the reference at the drop position, hiding the hover affordance", async () => {
+      mockInvoke({ import_attachment: "attachment:01DROP" });
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+      await waitFor(() => expect(editable.textContent).toBe("Loaded"));
+      const handler = dragDropHandler();
+      const body = document.querySelector(".note-editor__body") as HTMLElement;
+      body.getBoundingClientRect = () => ({ left: 0, top: 0, right: 800, bottom: 600 }) as DOMRect;
+
+      act(() =>
+        handler({ payload: { type: "enter", paths: ["/home/user/shot.png"], position: physicalPosition(5, 5) } }),
+      );
+      expect(body.getAttribute("data-drag-over")).toBe("true");
+
+      act(() =>
+        handler({ payload: { type: "drop", paths: ["/home/user/shot.png"], position: physicalPosition(5, 5) } }),
+      );
+
+      expect(body.getAttribute("data-drag-over")).toBeNull();
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("import_attachment", {
+          rootId: "01ROOT",
+          absolutePath: "/home/user/shot.png",
+        }),
+      );
+      await waitFor(() => expect(editable.textContent).toContain("attachment:01DROP"));
     });
   });
 

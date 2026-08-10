@@ -7,10 +7,12 @@ import { EVENT_MENU_ABOUT, EVENT_MENU_SETTINGS, type Config, type ConfigOutcome 
 const invoke = vi.hoisted(() => vi.fn());
 const listen = vi.hoisted(() => vi.fn());
 const openUrl = vi.hoisted(() => vi.fn());
+const onDragDropEvent = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
+vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent }) }));
 
 const EMPTY_CONFIG: Config = { version: 1, roots: [{ id: "01ROOT", path: "/notes", auto_sync: false, remote_url: "" }] };
 
@@ -64,6 +66,7 @@ describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listen.mockResolvedValue(() => {});
+    onDragDropEvent.mockResolvedValue(() => {});
     mockInvoke();
   });
 
