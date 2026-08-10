@@ -945,6 +945,7 @@ describe("NoteEditor", () => {
       await user.keyboard("{End}");
 
       await user.click(screen.getByTitle("Image"));
+      await user.click(screen.getByRole("menuitem", { name: "Attach image file…" }));
 
       await waitFor(() =>
         expect(invoke).toHaveBeenCalledWith("write_attachment", {
@@ -966,6 +967,7 @@ describe("NoteEditor", () => {
       const editable = await screen.findByRole("textbox");
 
       await user.click(screen.getByTitle("Image"));
+      await user.click(screen.getByRole("menuitem", { name: "Attach image file…" }));
 
       await waitFor(() => expect(invoke).toHaveBeenCalledWith("pick_image_file"));
       expect(editable.textContent).toBe("Loaded");
@@ -991,6 +993,7 @@ describe("NoteEditor", () => {
       const editable = await screen.findByRole("textbox");
 
       await user.click(screen.getByTitle("Image"));
+      await user.click(screen.getByRole("menuitem", { name: "Attach image file…" }));
 
       expect(await screen.findByRole("alert")).toHaveProperty(
         "textContent",
@@ -1012,6 +1015,7 @@ describe("NoteEditor", () => {
       await screen.findByRole("textbox");
 
       await user.click(screen.getByTitle("Image"));
+      await user.click(screen.getByRole("menuitem", { name: "Attach image file…" }));
       expect(screen.getByTitle("Image").hasAttribute("disabled")).toBe(true);
 
       resolvePick(null);

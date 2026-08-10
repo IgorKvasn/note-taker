@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useDismissableMenu } from "../hooks/useDismissableMenu";
 import "./TreeContextMenu.css";
 
 export interface ContextMenuState {
@@ -32,25 +32,7 @@ export function TreeContextMenu({
   onRename,
   onDelete,
 }: TreeContextMenuProps) {
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handlePointerDown = (event: MouseEvent) => {
-      if (menuRef.current !== null && !menuRef.current.contains(event.target as Node)) {
-        onClose();
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [onClose]);
+  const menuRef = useDismissableMenu<HTMLDivElement>(onClose);
 
   return (
     <div

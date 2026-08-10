@@ -1,10 +1,12 @@
 import { useState } from "react";
 import type { EditorView } from "@codemirror/view";
 import type { LinkedNote } from "../ipc";
+import { useDismissableMenu } from "../hooks/useDismissableMenu";
 import { NoteLinkPicker } from "./NoteLinkPicker";
 import {
   insertCodeBlock,
   insertHorizontalRule,
+  insertImage,
   insertLink,
   insertNoteLink,
   insertTable,
@@ -22,7 +24,8 @@ interface NoteToolbarProps {
   /** Linkable notes in the current root; same-root only by design. */
   linkableNotes?: LinkedNote[];
   /** Triggers the image-attach flow (file dialog, then write + insert) for
-   * the 🖼 button (issue #75). Absent (e.g. in tests) leaves it a no-op. */
+   * the 🖼 button's "Attach image file…" menu item (issue #75, wired into the
+   * menu by #76). Absent (e.g. in tests) leaves it a no-op. */
   onAttachImage?: () => void;
   /** Disables the 🖼 button while a pick+write is already in flight, in
    * addition to the existing `view === null` rule. */
@@ -42,9 +45,9 @@ function dispatchCommand(view: EditorView, run: (view: EditorView) => void) {
 
 // The last group of `GROUPS`' plain, CM6-dispatching buttons -- rendered
 // separately below, interleaved with the 🖼 button, which unlike every other
-// button here doesn't dispatch a CM6 command directly: it opens a file
-// dialog first (issue #75), so it can't be folded into this uniform
-// `ToolbarButtonSpec` shape.
+// button here doesn't dispatch a CM6 command directly: it opens a menu
+// (issue #76) offering either a direct CM6 dispatch or a file dialog, so it
+// can't be folded into this uniform `ToolbarButtonSpec` shape.
 const INLINE_GROUPS: ToolbarButtonSpec[][] = [
   [
     { label: "B", title: "Bold (Ctrl/Cmd+B)", run: (view) => view.dispatch(toggleWrap(view.state, "**")) },
@@ -91,6 +94,48 @@ const LAST_GROUP_AFTER_IMAGE: ToolbarButtonSpec[] = [
   { label: "—", title: "Horizontal rule", run: (view) => view.dispatch(insertHorizontalRule(view.state)) },
 ];
 
+interface ImageMenuProps {
+  onInsertUrl: () => void;
+  onAttachFile: () => void;
+  onClose: () => void;
+}
+
+/**
+ * The 🖼 button's dropdown (issue #76): one glyph now maps to two distinct
+ * actions -- the pre-#75 typed-URL insert, kept unchanged, and #75's
+ * file-attach flow -- with no sensible default for a bare click. Dismissal
+ * (click-away, Escape) reuses `useDismissableMenu`, the same hook
+ * `TreeContextMenu` uses, rather than a second copy of that logic.
+ */
+function ImageMenu({ onInsertUrl, onAttachFile, onClose }: ImageMenuProps) {
+  const menuRef = useDismissableMenu<HTMLDivElement>(onClose);
+
+  return (
+    <div ref={menuRef} className="note-toolbar__image-menu" role="menu">
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onInsertUrl();
+          onClose();
+        }}
+      >
+        Insert image URL…
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onAttachFile();
+          onClose();
+        }}
+      >
+        Attach image file…
+      </button>
+    </div>
+  );
+}
+
 function ToolbarButton({ view, button }: { view: EditorView | null; button: ToolbarButtonSpec }) {
   return (
     <button
@@ -112,6 +157,7 @@ function ToolbarButton({ view, button }: { view: EditorView | null; button: Tool
 
 export function NoteToolbar({ view, linkableNotes = [], onAttachImage, isAttaching = false }: NoteToolbarProps) {
   const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [isImageMenuOpen, setIsImageMenuOpen] = useState(false);
 
   return (
     <div className="note-toolbar" data-testid="note-toolbar">
@@ -126,16 +172,29 @@ export function NoteToolbar({ view, linkableNotes = [], onAttachImage, isAttachi
         {LAST_GROUP_BEFORE_IMAGE.map((button) => (
           <ToolbarButton key={button.title} view={view} button={button} />
         ))}
-        <button
-          type="button"
-          className="note-toolbar__button"
-          title="Image"
-          disabled={view === null || isAttaching}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => onAttachImage?.()}
-        >
-          🖼
-        </button>
+        <div className="note-toolbar__image-menu-anchor">
+          <button
+            type="button"
+            className="note-toolbar__button"
+            title="Image"
+            disabled={view === null || isAttaching}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setIsImageMenuOpen(true)}
+          >
+            🖼
+          </button>
+          {isImageMenuOpen && (
+            <ImageMenu
+              onInsertUrl={() => {
+                if (view !== null) {
+                  dispatchCommand(view, (target) => target.dispatch(insertImage(target.state)));
+                }
+              }}
+              onAttachFile={() => onAttachImage?.()}
+              onClose={() => setIsImageMenuOpen(false)}
+            />
+          )}
+        </div>
         {LAST_GROUP_AFTER_IMAGE.map((button) => (
           <ToolbarButton key={button.title} view={view} button={button} />
         ))}

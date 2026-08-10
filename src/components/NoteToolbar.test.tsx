@@ -43,16 +43,83 @@ describe("NoteToolbar", () => {
     view.destroy();
   });
 
-  describe("image attach button", () => {
-    it("calls onAttachImage instead of dispatching into the editor", async () => {
+  describe("image menu", () => {
+    it("opens a menu with exactly the two expected items instead of acting directly", async () => {
+      const user = userEvent.setup();
+      const view = new EditorView({ state: EditorState.create({ doc: "hello" }) });
+
+      render(<NoteToolbar view={view} />);
+      await user.click(screen.getByTitle("Image"));
+
+      expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+      expect(screen.getByRole("menuitem", { name: "Insert image URL…" })).toBeDefined();
+      expect(screen.getByRole("menuitem", { name: "Attach image file…" })).toBeDefined();
+      expect(view.state.doc.toString()).toBe("hello");
+
+      view.destroy();
+    });
+
+    it("'Insert image URL…' reproduces the pre-existing typed-URL behavior and closes the menu", async () => {
+      const user = userEvent.setup();
+      const view = new EditorView({ state: EditorState.create({ doc: "hello", selection: { anchor: 0, head: 5 } }) });
+
+      render(<NoteToolbar view={view} />);
+      await user.click(screen.getByTitle("Image"));
+      await user.click(screen.getByRole("menuitem", { name: "Insert image URL…" }));
+
+      expect(view.state.doc.toString()).toBe("![hello](url)");
+      expect(screen.queryByRole("menu")).toBeNull();
+
+      view.destroy();
+    });
+
+    it("'Attach image file…' calls onAttachImage and closes the menu without touching the document", async () => {
       const user = userEvent.setup();
       const onAttachImage = vi.fn();
       const view = new EditorView({ state: EditorState.create({ doc: "hello" }) });
 
       render(<NoteToolbar view={view} onAttachImage={onAttachImage} />);
       await user.click(screen.getByTitle("Image"));
+      await user.click(screen.getByRole("menuitem", { name: "Attach image file…" }));
 
       expect(onAttachImage).toHaveBeenCalledOnce();
+      expect(view.state.doc.toString()).toBe("hello");
+      expect(screen.queryByRole("menu")).toBeNull();
+
+      view.destroy();
+    });
+
+    it("dismisses on click-away without invoking either action", async () => {
+      const user = userEvent.setup();
+      const onAttachImage = vi.fn();
+      const view = new EditorView({ state: EditorState.create({ doc: "hello" }) });
+
+      render(<NoteToolbar view={view} onAttachImage={onAttachImage} />);
+      await user.click(screen.getByTitle("Image"));
+      expect(screen.getByRole("menu")).toBeDefined();
+
+      await user.click(document.body);
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(onAttachImage).not.toHaveBeenCalled();
+      expect(view.state.doc.toString()).toBe("hello");
+
+      view.destroy();
+    });
+
+    it("dismisses on Escape without invoking either action", async () => {
+      const user = userEvent.setup();
+      const onAttachImage = vi.fn();
+      const view = new EditorView({ state: EditorState.create({ doc: "hello" }) });
+
+      render(<NoteToolbar view={view} onAttachImage={onAttachImage} />);
+      await user.click(screen.getByTitle("Image"));
+      expect(screen.getByRole("menu")).toBeDefined();
+
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(onAttachImage).not.toHaveBeenCalled();
       expect(view.state.doc.toString()).toBe("hello");
 
       view.destroy();
