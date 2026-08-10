@@ -490,6 +490,12 @@ mod tests {
     fn set_identity(dir: &Path) {
         run_git(dir, &["config", "user.email", "test@example.com"]).unwrap();
         run_git(dir, &["config", "user.name", "Test"]).unwrap();
+        // A machine with `commit.gpgsign = true` in its global gitconfig would
+        // otherwise have every `git commit` here try to invoke `gpg`/`pinentry`,
+        // which can hang indefinitely with no terminal to prompt on. This repo
+        // config overrides the global setting for every throwaway repo these
+        // tests create.
+        run_git(dir, &["config", "commit.gpgsign", "false"]).unwrap();
     }
 
     /// The branch name is pinned rather than left to `init.defaultBranch`:
@@ -1096,5 +1102,235 @@ mod tests {
                 "all callers must get the same slot for one root id"
             );
         }
+    }
+
+    /// A real `AppHandle` for `run_startup_catchup`/`trigger_sync` to call
+    /// `app.emit(...)` on. The real `Wry` runtime (not `tauri::test`'s
+    /// `MockRuntime`) is required here: this crate's `tauri` dependency pulls
+    /// in the `wry` feature by default, so every `AppHandle` in `sync.rs` is
+    /// concretely `AppHandle<Wry>` -- a `MockRuntime` handle is a different,
+    /// incompatible type and would not type-check against `run_startup_catchup`'s
+    /// signature. `.any_thread()` is required because `cargo test` runs each
+    /// test on its own worker thread, never the process's actual main thread,
+    /// and `Wry` otherwise refuses to initialize its event loop off it. Building
+    /// the `App` this way needs no display connection since no window is ever
+    /// created.
+    ///
+    /// GTK (which `Wry` initializes under the hood on Linux) can only ever be
+    /// initialized once per process, on one thread -- a second `App` built on
+    /// a different test's thread panics. So the `App` is built exactly once
+    /// and leaked (it's never meant to be torn down in these tests anyway);
+    /// every test then clones the same cheap, `Send + Sync` `AppHandle` out of
+    /// a `OnceLock` rather than building its own `App`.
+    fn mock_app_handle() -> AppHandle {
+        static HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+        HANDLE
+            .get_or_init(|| {
+                let app: tauri::App<tauri::Wry> = tauri::Builder::<tauri::Wry>::new()
+                    .any_thread()
+                    .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                    .unwrap();
+                let handle = app.handle().clone();
+                Box::leak(Box::new(app));
+                handle
+            })
+            .clone()
+    }
+
+    /// Polls `condition` until it's true or `timeout` elapses, for waiting on
+    /// `trigger_sync`'s background task (spawned by `run_startup_catchup`)
+    /// without a fixed sleep -- fast when the task finishes quickly, bounded
+    /// when it doesn't.
+    fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if condition() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn remote_log_oneline(remote_dir: &Path) -> String {
+        let log = run_git(remote_dir, &["log", "--oneline", "--all"]).unwrap();
+        String::from_utf8_lossy(&log.stdout).to_string()
+    }
+
+    #[test]
+    fn run_startup_catchup_pushes_committed_but_unpushed_commits_to_the_remote() {
+        let remote_dir = TempDir::new().unwrap();
+        init_bare_remote(remote_dir.path());
+
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        run_git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        // Seed an initial commit pushed with upstream tracking set up, as any
+        // root startup catchup runs against would already have from an
+        // earlier successful sync -- otherwise a plain `git push` has no
+        // upstream to push to regardless of what startup catchup does.
+        write_and_stage(dir.path(), "seed.md", "base\n");
+        run_git(dir.path(), &["add", "-A"]).unwrap();
+        run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
+        let seed_push = run_git(
+            dir.path(),
+            &["push", "-u", "origin", "HEAD:refs/heads/main"],
+        )
+        .unwrap();
+        assert!(seed_push.status.success());
+
+        write_and_stage(dir.path(), "note.md", "hello\n");
+        run_git(dir.path(), &["add", "-A"]).unwrap();
+        run_git(dir.path(), &["commit", "-m", "unpushed"]).unwrap();
+        // Working tree is clean -- the commit above exists locally only, and
+        // this is the only thing startup catchup needs to resolve.
+        assert!(!remote_log_oneline(remote_dir.path()).contains("unpushed"));
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = RootConfig {
+            id: "root-1".to_string(),
+            path: dir.path().to_str().unwrap().to_string(),
+            auto_sync: true,
+            remote_url: remote_dir.path().to_str().unwrap().to_string(),
+            sync_debounce_secs: 0,
+        };
+
+        run_startup_catchup(&app, &manager, vec![root]);
+
+        let pushed = wait_until(Duration::from_secs(5), || {
+            remote_log_oneline(remote_dir.path()).contains("unpushed")
+        });
+        assert!(
+            pushed,
+            "expected startup catchup to push the unpushed commit to the remote"
+        );
+    }
+
+    #[test]
+    fn run_startup_catchup_commits_a_dirty_working_tree_and_pushes_it() {
+        let remote_dir = TempDir::new().unwrap();
+        init_bare_remote(remote_dir.path());
+
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        run_git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        // Seed an initial pushed commit so this root has an upstream to push
+        // against, then leave the working tree dirty -- the scenario left
+        // behind by a quit mid-save or mid-sync-delay (issue #84/#86).
+        write_and_stage(dir.path(), "note.md", "hello\n");
+        run_git(dir.path(), &["add", "-A"]).unwrap();
+        run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
+        let seed_push = run_git(
+            dir.path(),
+            &["push", "-u", "origin", "HEAD:refs/heads/main"],
+        )
+        .unwrap();
+        assert!(seed_push.status.success());
+
+        write_and_stage(dir.path(), "note.md", "hello, edited\n");
+        let status = run_git(dir.path(), &["status", "--porcelain"]).unwrap();
+        assert!(
+            !status.stdout.is_empty(),
+            "expected a dirty working tree before startup catchup runs"
+        );
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = RootConfig {
+            id: "root-1".to_string(),
+            path: dir.path().to_str().unwrap().to_string(),
+            auto_sync: true,
+            remote_url: remote_dir.path().to_str().unwrap().to_string(),
+            sync_debounce_secs: 0,
+        };
+
+        run_startup_catchup(&app, &manager, vec![root]);
+
+        let synced = wait_until(Duration::from_secs(5), || {
+            manager.last_known_state("root-1") == Some(SyncState::Synced)
+        });
+        assert!(
+            synced,
+            "expected the dirty working tree to be committed and pushed"
+        );
+
+        let status_after = run_git(dir.path(), &["status", "--porcelain"]).unwrap();
+        assert!(
+            status_after.stdout.is_empty(),
+            "the dirty change must have been committed"
+        );
+        assert!(
+            remote_log_oneline(remote_dir.path()).contains("note-taker sync"),
+            "the commit made from the dirty working tree must have reached the remote"
+        );
+    }
+
+    #[test]
+    fn run_startup_catchup_does_not_push_when_auto_sync_is_disabled() {
+        let remote_dir = TempDir::new().unwrap();
+        init_bare_remote(remote_dir.path());
+
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        run_git(
+            dir.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        write_and_stage(dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = RootConfig {
+            id: "root-1".to_string(),
+            path: dir.path().to_str().unwrap().to_string(),
+            auto_sync: false,
+            remote_url: remote_dir.path().to_str().unwrap().to_string(),
+            sync_debounce_secs: 0,
+        };
+
+        run_startup_catchup(&app, &manager, vec![root]);
+
+        let committed_locally = wait_until(Duration::from_secs(5), || {
+            manager.last_known_state("root-1") == Some(SyncState::LocalOnly)
+        });
+        assert!(
+            committed_locally,
+            "expected the dirty working tree to still be committed locally"
+        );
+
+        // Give a wrongly-pushing implementation a moment it could use to push
+        // before asserting the remote never received anything.
+        thread::sleep(Duration::from_millis(200));
+        assert!(
+            remote_log_oneline(remote_dir.path()).is_empty(),
+            "auto_sync is disabled for this root -- startup catchup must not push"
+        );
     }
 }
