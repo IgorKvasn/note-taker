@@ -331,13 +331,17 @@ fn read_attachment(root_id: String, id: String) -> Result<tauri::ipc::Response, 
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Deletes every attachment `cleanup::find_orphaned_attachments` reports for
-/// `root_path`, through `notes::delete_item` so the removal rides the same
-/// sync/commit chain as any other mutation, with no special-cased commit
-/// message. Shared by the silent background path and the manual execute step
-/// -- there is no separate "more aggressive" manual mode.
-fn delete_orphaned_attachments(root_path: &Path, preview: &CleanupPreview) -> Result<(), String> {
+/// Deletes every attachment `cleanup::find_orphaned_attachments` reports,
+/// through `notes::delete_item` so the removal rides the same sync/commit
+/// chain as any other mutation, with no special-cased commit message. Shared
+/// by the silent background path and the manual execute step -- there is no
+/// separate "more aggressive" manual mode. Resolves each attachment's root
+/// path from its own `root_id` (rather than taking one shared root) so a
+/// preview spanning multiple roots (issue #89) deletes from each root's own
+/// `.attachments/` directory, not just the first.
+fn delete_orphaned_attachments(preview: &CleanupPreview) -> Result<(), String> {
     for attachment in &preview.attachments {
+        let root_path = config::find_root_path(&attachment.root_id)?;
         notes::delete_item(&root_path.join(&attachment.path))?;
     }
     Ok(())
@@ -363,7 +367,7 @@ fn cleanup_attachments(
         open_note_content.as_deref(),
     );
 
-    delete_orphaned_attachments(&root_path, &preview)?;
+    delete_orphaned_attachments(&preview)?;
     trigger_sync_for_root(&app, &root_id, None);
     Ok(())
 }
@@ -410,8 +414,55 @@ fn execute_attachment_cleanup(
         open_note_content.as_deref(),
     );
 
-    delete_orphaned_attachments(&root_path, &preview)?;
+    delete_orphaned_attachments(&preview)?;
     trigger_sync_for_root(&app, &root_id, None);
+    Ok(preview)
+}
+
+/// The Settings dialog's manual trigger, extended to every configured root at
+/// once (issue #89) rather than just whichever root happens to have a note
+/// open -- cleanup is root-agnostic housekeeping, and the button is enabled
+/// even with no note open. `open_root_id`/`open_note_content` scope buffer
+/// protection to the open note's own root, same as the single-root command.
+#[tauri::command]
+fn preview_attachment_cleanup_all_roots(
+    app: AppHandle,
+    open_root_id: Option<String>,
+    open_note_content: Option<String>,
+) -> Result<CleanupPreview, String> {
+    let cache = app.state::<Arc<ReferenceCache>>();
+    Ok(cleanup::find_orphaned_attachments_across_roots(
+        &config::all_root_configs(),
+        &cache,
+        open_root_id.as_deref(),
+        open_note_content.as_deref(),
+    ))
+}
+
+/// Deletes exactly what a fresh all-roots scan currently reports as orphaned,
+/// mirroring [`execute_attachment_cleanup`]'s re-scan-rather-than-trust-the-
+/// preview approach but across every configured root (issue #89). Each root's
+/// sync is triggered independently, matching how every other multi-root
+/// action (e.g. [`run_startup_catchup`]) treats roots as independent.
+#[tauri::command]
+fn execute_attachment_cleanup_all_roots(
+    app: AppHandle,
+    open_root_id: Option<String>,
+    open_note_content: Option<String>,
+) -> Result<CleanupPreview, String> {
+    let cache = app.state::<Arc<ReferenceCache>>();
+    let roots = config::all_root_configs();
+    let preview = cleanup::find_orphaned_attachments_across_roots(
+        &roots,
+        &cache,
+        open_root_id.as_deref(),
+        open_note_content.as_deref(),
+    );
+
+    delete_orphaned_attachments(&preview)?;
+    for root in roots {
+        trigger_sync_for_root(&app, &root.id, None);
+    }
     Ok(preview)
 }
 
@@ -493,6 +544,8 @@ pub fn run() {
             cleanup_attachments,
             preview_attachment_cleanup,
             execute_attachment_cleanup,
+            preview_attachment_cleanup_all_roots,
+            execute_attachment_cleanup_all_roots,
             get_state,
             save_state,
             check_for_update,
@@ -597,5 +650,89 @@ mod tests {
             3,
             "version {version} must have exactly three components"
         );
+    }
+
+    fn with_xdg_config_home<T>(f: impl FnOnce(&Path) -> T) -> T {
+        // Shared with config.rs's tests: `config_path` reads $XDG_CONFIG_HOME
+        // through `directories::BaseDirs`, which is process-wide state.
+        let _guard = config::tests::ENV_LOCK.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let previous = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+
+        let result = f(temp_dir.path());
+
+        match previous {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+
+        result
+    }
+
+    fn write_test_config(roots: &[config::RootConfig]) {
+        let config = config::Config {
+            version: 1,
+            roots: roots.to_vec(),
+        };
+        let path = config::config_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn delete_orphaned_attachments_deletes_from_every_root_named_in_the_preview() {
+        with_xdg_config_home(|_| {
+            let root_a = tempfile::TempDir::new().unwrap();
+            let root_b = tempfile::TempDir::new().unwrap();
+            let attachments_a = root_a.path().join(".attachments");
+            let attachments_b = root_b.path().join(".attachments");
+            std::fs::create_dir_all(&attachments_a).unwrap();
+            std::fs::create_dir_all(&attachments_b).unwrap();
+            std::fs::write(attachments_a.join("01AAA-a.png"), b"a").unwrap();
+            std::fs::write(attachments_b.join("01BBB-b.png"), b"b").unwrap();
+
+            write_test_config(&[
+                config::RootConfig {
+                    id: "root-a".to_string(),
+                    path: root_a.path().to_string_lossy().into_owned(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                },
+                config::RootConfig {
+                    id: "root-b".to_string(),
+                    path: root_b.path().to_string_lossy().into_owned(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                },
+            ]);
+
+            let preview = CleanupPreview {
+                attachments: vec![
+                    cleanup::OrphanedAttachment {
+                        root_id: "root-a".to_string(),
+                        path: ".attachments/01AAA-a.png".to_string(),
+                        size: 1,
+                    },
+                    cleanup::OrphanedAttachment {
+                        root_id: "root-b".to_string(),
+                        path: ".attachments/01BBB-b.png".to_string(),
+                        size: 1,
+                    },
+                ],
+                total_size: 2,
+            };
+
+            delete_orphaned_attachments(&preview).expect("delete should succeed");
+
+            assert!(
+                !attachments_a.join("01AAA-a.png").exists(),
+                "root-a's attachment must be deleted, not just the first root's"
+            );
+            assert!(
+                !attachments_b.join("01BBB-b.png").exists(),
+                "root-b's attachment must also be deleted"
+            );
+        });
     }
 }

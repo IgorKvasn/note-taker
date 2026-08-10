@@ -202,6 +202,10 @@ fn all_referenced_ids(
 /// `extra_reference_text`) and past the 24-hour grace period.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct OrphanedAttachment {
+    /// The root this attachment was found in -- needed once a preview spans
+    /// multiple roots (issue #89), so execute can call `notes::delete_item`
+    /// against the right one.
+    pub root_id: String,
     /// Root-relative path (`.attachments/<file>`), suitable for
     /// `notes::delete_item`.
     pub path: String,
@@ -245,6 +249,7 @@ pub fn find_orphaned_attachments(
         };
         total_size += file.size;
         attachments.push(OrphanedAttachment {
+            root_id: root_id.to_string(),
             path: relative_path.to_string_lossy().replace('\\', "/"),
             size: file.size,
         });
@@ -254,6 +259,35 @@ pub fn find_orphaned_attachments(
         attachments,
         total_size,
     }
+}
+
+/// Runs [`find_orphaned_attachments`] over every root in `roots`, summing the
+/// results into one flat [`CleanupPreview`] -- the shared loop-all-roots shape
+/// behind the Settings dialog's all-roots preview/execute commands (issue
+/// #89), mirroring the per-root loop the silent startup trigger already uses.
+/// `open_root_id`/`open_note_content` are the open note's root and live
+/// buffer, if any; the buffer is only passed into the scan for the root whose
+/// id matches `open_root_id` -- every other root scans disk-only, same as the
+/// background trigger already treats every root that isn't currently open.
+pub fn find_orphaned_attachments_across_roots(
+    roots: &[crate::config::RootConfig],
+    cache: &ReferenceCache,
+    open_root_id: Option<&str>,
+    open_note_content: Option<&str>,
+) -> CleanupPreview {
+    let mut combined = CleanupPreview::default();
+    for root in roots {
+        let extra_reference_text = if Some(root.id.as_str()) == open_root_id {
+            open_note_content
+        } else {
+            None
+        };
+        let preview =
+            find_orphaned_attachments(&root.id, Path::new(&root.path), cache, extra_reference_text);
+        combined.attachments.extend(preview.attachments);
+        combined.total_size += preview.total_size;
+    }
+    combined
 }
 
 #[cfg(test)]
@@ -381,6 +415,7 @@ mod tests {
         let preview = find_orphaned_attachments("root", temp_dir.path(), &cache, None);
 
         assert_eq!(preview.attachments.len(), 1);
+        assert_eq!(preview.attachments[0].root_id, "root");
         assert_eq!(
             preview.attachments[0].path,
             ".attachments/01STALE-photo.png"
@@ -462,5 +497,99 @@ mod tests {
 
         assert_eq!(preview.attachments.len(), 1);
         assert_eq!(preview.attachments[0].path, ".attachments/01USED-photo.png");
+    }
+
+    fn root_config(id: &str, path: &Path) -> crate::config::RootConfig {
+        crate::config::RootConfig {
+            id: id.to_string(),
+            path: path.to_string_lossy().into_owned(),
+            auto_sync: false,
+            remote_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn find_orphaned_attachments_across_roots_sums_counts_and_sizes_across_roots() {
+        let root_a = TempDir::new().unwrap();
+        let root_b = TempDir::new().unwrap();
+        write_attachment_aged(
+            root_a.path(),
+            "01AAA-photo.png",
+            b"12345",
+            Duration::from_secs(48 * 60 * 60),
+        );
+        write_attachment_aged(
+            root_b.path(),
+            "01BBB-photo.png",
+            b"1234567",
+            Duration::from_secs(48 * 60 * 60),
+        );
+        let cache = ReferenceCache::new();
+        let roots = [
+            root_config("root-a", root_a.path()),
+            root_config("root-b", root_b.path()),
+        ];
+
+        let preview = find_orphaned_attachments_across_roots(&roots, &cache, None, None);
+
+        assert_eq!(preview.attachments.len(), 2);
+        assert_eq!(preview.total_size, 12);
+        assert!(preview
+            .attachments
+            .iter()
+            .any(|attachment| attachment.root_id == "root-a" && attachment.size == 5));
+        assert!(preview
+            .attachments
+            .iter()
+            .any(|attachment| attachment.root_id == "root-b" && attachment.size == 7));
+    }
+
+    #[test]
+    fn find_orphaned_attachments_across_roots_scopes_the_open_buffer_to_its_own_root() {
+        let root_a = TempDir::new().unwrap();
+        let root_b = TempDir::new().unwrap();
+        // Same ULID referenced only in the open note's live buffer, present as
+        // an unreferenced-on-disk attachment in both roots.
+        write_attachment_aged(
+            root_a.path(),
+            "01LIVE-photo.png",
+            b"bytes",
+            Duration::from_secs(48 * 60 * 60),
+        );
+        write_attachment_aged(
+            root_b.path(),
+            "01LIVE-photo.png",
+            b"bytes",
+            Duration::from_secs(48 * 60 * 60),
+        );
+        let cache = ReferenceCache::new();
+        let roots = [
+            root_config("root-a", root_a.path()),
+            root_config("root-b", root_b.path()),
+        ];
+
+        let preview = find_orphaned_attachments_across_roots(
+            &roots,
+            &cache,
+            Some("root-a"),
+            Some("![img](attachment:01LIVE)"),
+        );
+
+        assert_eq!(
+            preview.attachments.len(),
+            1,
+            "the buffer reference must protect only its own root's attachment"
+        );
+        assert_eq!(preview.attachments[0].root_id, "root-b");
+    }
+
+    #[test]
+    fn find_orphaned_attachments_across_roots_returns_nothing_for_an_empty_root_list() {
+        let cache = ReferenceCache::new();
+
+        let preview = find_orphaned_attachments_across_roots(&[], &cache, None, None);
+
+        assert!(preview.attachments.is_empty());
+        assert_eq!(preview.total_size, 0);
     }
 }

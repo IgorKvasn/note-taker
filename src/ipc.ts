@@ -33,6 +33,8 @@ export const COMMAND_READ_ATTACHMENT = "read_attachment";
 export const COMMAND_CLEANUP_ATTACHMENTS = "cleanup_attachments";
 export const COMMAND_PREVIEW_ATTACHMENT_CLEANUP = "preview_attachment_cleanup";
 export const COMMAND_EXECUTE_ATTACHMENT_CLEANUP = "execute_attachment_cleanup";
+export const COMMAND_PREVIEW_ATTACHMENT_CLEANUP_ALL_ROOTS = "preview_attachment_cleanup_all_roots";
+export const COMMAND_EXECUTE_ATTACHMENT_CLEANUP_ALL_ROOTS = "execute_attachment_cleanup_all_roots";
 
 /** Emitted by the backend git sync chain (spec §7); one-way, never invoked. */
 export const EVENT_SYNC_STATUS = "sync-status";
@@ -193,6 +195,7 @@ export interface PickedFile {
 
 /** Mirrors `OrphanedAttachment` in `src-tauri/src/cleanup.rs`. */
 export interface OrphanedAttachment {
+  root_id: string;
   path: string;
   size: number;
 }

@@ -541,7 +541,10 @@ describe("App", () => {
     mockInvoke({
       list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
       open_note: { content: "no attachments here", id: "01NOTE", is_conflicted: false },
-      preview_attachment_cleanup: { attachments: [{ path: ".attachments/01OLD-x.png", size: 2048 }], total_size: 2048 },
+      preview_attachment_cleanup_all_roots: {
+        attachments: [{ root_id: EMPTY_CONFIG.roots[0].id, path: ".attachments/01OLD-x.png", size: 2048 }],
+        total_size: 2048,
+      },
     });
     render(<App />);
     await screen.findByTestId("split-pane-left");
@@ -555,20 +558,26 @@ describe("App", () => {
     expect(within(dialog).getByText(/1 unused attachment/)).toBeDefined();
     expect(within(dialog).getByText(/2\.0 KB/)).toBeDefined();
     await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("preview_attachment_cleanup", {
-        rootId: EMPTY_CONFIG.roots[0].id,
+      expect(invoke).toHaveBeenCalledWith("preview_attachment_cleanup_all_roots", {
+        openRootId: EMPTY_CONFIG.roots[0].id,
         openNoteContent: "no attachments here",
       }),
     );
-    expect(invoke).not.toHaveBeenCalledWith("execute_attachment_cleanup", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("execute_attachment_cleanup_all_roots", expect.anything());
   });
 
   it("deletes and shows a completion toast when the cleanup confirmation is confirmed", async () => {
     mockInvoke({
       list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
       open_note: { content: "no attachments here", id: "01NOTE", is_conflicted: false },
-      preview_attachment_cleanup: { attachments: [{ path: ".attachments/01OLD-x.png", size: 2048 }], total_size: 2048 },
-      execute_attachment_cleanup: { attachments: [{ path: ".attachments/01OLD-x.png", size: 2048 }], total_size: 2048 },
+      preview_attachment_cleanup_all_roots: {
+        attachments: [{ root_id: EMPTY_CONFIG.roots[0].id, path: ".attachments/01OLD-x.png", size: 2048 }],
+        total_size: 2048,
+      },
+      execute_attachment_cleanup_all_roots: {
+        attachments: [{ root_id: EMPTY_CONFIG.roots[0].id, path: ".attachments/01OLD-x.png", size: 2048 }],
+        total_size: 2048,
+      },
     });
     render(<App />);
     await screen.findByTestId("split-pane-left");
@@ -582,8 +591,8 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("execute_attachment_cleanup", {
-        rootId: EMPTY_CONFIG.roots[0].id,
+      expect(invoke).toHaveBeenCalledWith("execute_attachment_cleanup_all_roots", {
+        openRootId: EMPTY_CONFIG.roots[0].id,
         openNoteContent: "no attachments here",
       }),
     );
@@ -595,7 +604,10 @@ describe("App", () => {
     mockInvoke({
       list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
       open_note: { content: "no attachments here", id: "01NOTE", is_conflicted: false },
-      preview_attachment_cleanup: { attachments: [{ path: ".attachments/01OLD-x.png", size: 2048 }], total_size: 2048 },
+      preview_attachment_cleanup_all_roots: {
+        attachments: [{ root_id: EMPTY_CONFIG.roots[0].id, path: ".attachments/01OLD-x.png", size: 2048 }],
+        total_size: 2048,
+      },
     });
     render(<App />);
     await screen.findByTestId("split-pane-left");
@@ -609,7 +621,126 @@ describe("App", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     expect(screen.queryByRole("dialog", { name: "Clean up unused attachments?" })).toBeNull();
-    expect(invoke).not.toHaveBeenCalledWith("execute_attachment_cleanup", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("execute_attachment_cleanup_all_roots", expect.anything());
+  });
+
+  it("cleans up every configured root in one action even when no note is open", async () => {
+    const config: Config = {
+      version: 1,
+      roots: [
+        { id: "01ROOT-A", path: "/notes-a", auto_sync: false, remote_url: "" },
+        { id: "01ROOT-B", path: "/notes-b", auto_sync: false, remote_url: "" },
+      ],
+    };
+    mockInvoke({
+      get_config: { type: "ok", config } satisfies ConfigOutcome,
+      preview_attachment_cleanup_all_roots: {
+        attachments: [
+          { root_id: "01ROOT-A", path: ".attachments/01OLD-a.png", size: 1024 },
+          { root_id: "01ROOT-B", path: ".attachments/01OLD-b.png", size: 1024 },
+        ],
+        total_size: 2048,
+      },
+      execute_attachment_cleanup_all_roots: {
+        attachments: [
+          { root_id: "01ROOT-A", path: ".attachments/01OLD-a.png", size: 1024 },
+          { root_id: "01ROOT-B", path: ".attachments/01OLD-b.png", size: 1024 },
+        ],
+        total_size: 2048,
+      },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await emitEvent(EVENT_MENU_SETTINGS);
+    const cleanupButton = await screen.findByRole("button", { name: "Clean up unused attachments" });
+    expect(cleanupButton).not.toHaveProperty("disabled", true);
+    await userEvent.click(cleanupButton);
+
+    const dialog = await screen.findByRole("dialog", { name: "Clean up unused attachments?" });
+    expect(within(dialog).getByText(/2 unused attachments/)).toBeDefined();
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("preview_attachment_cleanup_all_roots", {
+        openRootId: null,
+        openNoteContent: null,
+      }),
+    );
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("execute_attachment_cleanup_all_roots", {
+        openRootId: null,
+        openNoteContent: null,
+      }),
+    );
+    expect(await screen.findByText(/Deleted 2 unused attachments/)).toBeDefined();
+  });
+
+  it("scopes buffer protection to the open note's own root while cleaning up every root in the same action", async () => {
+    const config: Config = {
+      version: 1,
+      roots: [
+        { id: "01ROOT-A", path: "/notes-a", auto_sync: false, remote_url: "" },
+        { id: "01ROOT-B", path: "/notes-b", auto_sync: false, remote_url: "" },
+      ],
+    };
+    mockInvoke({
+      get_config: { type: "ok", config } satisfies ConfigOutcome,
+      list_tree: (args?: { rootId: string }) =>
+        Promise.resolve(
+          args!.rootId === "01ROOT-A" ? [{ name: "note.md", path: "note.md", is_directory: false, children: [] }] : [],
+        ),
+      open_note: { content: "![img](attachment:01LIVE)", id: "01NOTE", is_conflicted: false },
+      preview_attachment_cleanup_all_roots: {
+        attachments: [{ root_id: "01ROOT-B", path: ".attachments/01OTHER-b.png", size: 1024 }],
+        total_size: 1024,
+      },
+      execute_attachment_cleanup_all_roots: {
+        attachments: [{ root_id: "01ROOT-B", path: ".attachments/01OTHER-b.png", size: 1024 }],
+        total_size: 1024,
+      },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+    await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+    await screen.findByText("![img](attachment:01LIVE)");
+
+    await emitEvent(EVENT_MENU_SETTINGS);
+    await userEvent.click(await screen.findByRole("button", { name: "Clean up unused attachments" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Clean up unused attachments?" });
+    // 01ROOT-A's live buffer only protects a reference within its own root's
+    // scan (issue #89); the preview here reports only root-B's unrelated
+    // orphan, confirming the buffer content was sent scoped to root-A.
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("preview_attachment_cleanup_all_roots", {
+        openRootId: "01ROOT-A",
+        openNoteContent: "![img](attachment:01LIVE)",
+      }),
+    );
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("execute_attachment_cleanup_all_roots", {
+        openRootId: "01ROOT-A",
+        openNoteContent: "![img](attachment:01LIVE)",
+      }),
+    );
+    expect(await screen.findByText(/Deleted 1 unused attachment\b/)).toBeDefined();
+  });
+
+  it("disables the cleanup button only when zero roots are configured", async () => {
+    const config: Config = { version: 1, roots: [] };
+    mockInvoke({ get_config: { type: "ok", config } satisfies ConfigOutcome });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await emitEvent(EVENT_MENU_SETTINGS);
+    const cleanupButton = await screen.findByRole("button", { name: "Clean up unused attachments" });
+
+    expect(cleanupButton).toHaveProperty("disabled", true);
   });
 
   it("stacks the update notice above the local-only notice when both are showing", async () => {

@@ -19,10 +19,10 @@ import { isDescendantPath } from "./paths";
 import {
   COMMAND_CHECK_FOR_UPDATE,
   COMMAND_CLEANUP_ATTACHMENTS,
-  COMMAND_EXECUTE_ATTACHMENT_CLEANUP,
+  COMMAND_EXECUTE_ATTACHMENT_CLEANUP_ALL_ROOTS,
   COMMAND_GET_APP_VERSION,
   COMMAND_GET_CONFIG,
-  COMMAND_PREVIEW_ATTACHMENT_CLEANUP,
+  COMMAND_PREVIEW_ATTACHMENT_CLEANUP_ALL_ROOTS,
   COMMAND_SHOW_CONFIG_ERROR,
   EVENT_MENU_ABOUT,
   EVENT_MENU_SETTINGS,
@@ -215,18 +215,17 @@ export function App() {
   const closeSettings = useCallback(() => setIsSettingsOpen(false), []);
 
   /**
-   * Settings dialog's manual cleanup trigger (issue #79): fetches a preview
-   * (count + total size) before deleting anything -- the confirmation
-   * dialog below reports that, and only calls `execute_attachment_cleanup`
-   * once the user confirms.
+   * Settings dialog's manual cleanup trigger (issue #89): fetches a preview
+   * (count + total size) across every configured root before deleting
+   * anything -- the confirmation dialog below reports that, and only calls
+   * `execute_attachment_cleanup_all_roots` once the user confirms. The open
+   * note's live buffer, if any, protects references only within its own
+   * root's scan; every other root scans disk-only.
    */
   const startCleanup = useCallback(() => {
-    if (openNote === null) {
-      return;
-    }
     setIsCleaningUp(true);
-    invoke<CleanupPreview>(COMMAND_PREVIEW_ATTACHMENT_CLEANUP, {
-      rootId: openNote.rootId,
+    invoke<CleanupPreview>(COMMAND_PREVIEW_ATTACHMENT_CLEANUP_ALL_ROOTS, {
+      openRootId: openNote?.rootId ?? null,
       openNoteContent: openNoteContentRef.current,
     })
       .then(setCleanupPreview)
@@ -237,13 +236,9 @@ export function App() {
   const cancelCleanup = useCallback(() => setCleanupPreview(null), []);
 
   const confirmCleanup = useCallback(() => {
-    if (openNote === null) {
-      setCleanupPreview(null);
-      return;
-    }
     setIsCleaningUp(true);
-    invoke<CleanupPreview>(COMMAND_EXECUTE_ATTACHMENT_CLEANUP, {
-      rootId: openNote.rootId,
+    invoke<CleanupPreview>(COMMAND_EXECUTE_ATTACHMENT_CLEANUP_ALL_ROOTS, {
+      openRootId: openNote?.rootId ?? null,
       openNoteContent: openNoteContentRef.current,
     })
       .then((result) => {
@@ -356,7 +351,7 @@ export function App() {
               type="button"
               className="settings-dialog__cleanup"
               onClick={startCleanup}
-              disabled={openNote === null || isCleaningUp}
+              disabled={configOutcome.config.roots.length === 0 || isCleaningUp}
             >
               Clean up unused attachments
             </button>
