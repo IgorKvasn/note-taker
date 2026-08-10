@@ -2,7 +2,7 @@
 
 A Linux/Ubuntu desktop note-taking app. Notes are plain `.md` files organized in directories under one or more configurable root folders, each an independent git repository synced to its own remote.
 
-This document consolidates the 13 decisions charted on [Map: Note-taking app spec](https://github.com/IgorKvasn/note-taker/issues/1). Each section cites the ticket that owns the decision; those tickets hold the rejected alternatives and rationale, which are not repeated here. Where a ticket was later amended, only the final form appears below.
+This document consolidates the 13 decisions charted on [Map: Note-taking app spec](https://github.com/IgorKvasn/note-taker/issues/1), plus §11's image-attachment decisions charted on [Map: Image attachments in notes](https://github.com/IgorKvasn/note-taker/issues/65). Each section cites the ticket that owns the decision; those tickets hold the rejected alternatives and rationale, which are not repeated here. Where a ticket was later amended, only the final form appears below.
 
 **Status:** every decision is locked. Nothing in this document is an open question.
 
@@ -363,7 +363,137 @@ A self-hosted apt repo (`aptly`/`apt-ftparchive` + GPG signing + static hosting)
 
 ---
 
-## 11. Accepted gaps
+## 11. Image attachments
+
+All decisions from [Map: Image attachments in notes](https://github.com/IgorKvasn/note-taker/issues/65) and its child tickets. Attachments mirror the `note:` cross-note link mechanism (§9.2, `src/components/noteLinks.ts`) end to end: a custom URL scheme resolved by the app, a broken-target placeholder instead of a thrown error, no new CSP.
+
+### 11.1 Entry points
+
+Three ways for an image to enter a note, all producing the same `attachment:<ULID>` markdown reference:
+
+| Entry point | Mechanism | Ticket |
+|---|---|---|
+| Clipboard paste | `EditorView.domEventHandlers({ paste })` on the CM6 editor — a plain DOM `paste` event, no Tauri clipboard plugin | [#67](https://github.com/IgorKvasn/note-taker/issues/67) |
+| Drag-and-drop | Native `getCurrentWebview().onDragDropEvent()` exclusively — no DOM listeners, no `tauri.conf.json` change | [#72](https://github.com/IgorKvasn/note-taker/issues/72) |
+| Toolbar file picker | The 🖼 button's new "Attach image file…" menu item | [#71](https://github.com/IgorKvasn/note-taker/issues/71) |
+
+The 🖼 button's existing typed-URL behaviour (inserting `![alt](url)` for a remote `http(s)` image) stays reachable and unchanged — see §11.5.
+
+#### Paste
+
+Handled by `EditorView.domEventHandlers({ paste })`, which runs before CM6's built-in paste handling. The handler must decide **synchronously**: return `true` to claim the event (CM6 calls `preventDefault()`), then perform the async import and insert the reference when it resolves; returning `false`/`undefined` falls through to CM6's normal text paste.
+
+Clipboard image paste is **three distinct inputs, not one**:
+
+| Clipboard content | Source example | Handling |
+|---|---|---|
+| Encoded image bytes (`clipboardData.files`) | Screenshot tool (GNOME Screenshot, Flameshot, Spectacle) | `write_attachment` with the file's bytes |
+| A `file:///` path (`text/uri-list`) | Copying a file in Nautilus | `import_attachment` with the path |
+| Non-image content | Any other paste | Falls through to CM6's normal text paste |
+
+Nothing may hardcode `image/png` — the source tool decides the format, and the handler must branch on the actual `File.type` or sniff magic bytes. A pasted image has no original filename, so it is named `<ULID>-pasted.png` (or the appropriate extension) rather than left unnamed.
+
+**Version floor:** the WebKitGTK bug that hid images from `clipboardData.items`/`.files` (WebKit bug 218519) is fixed in the 2.52.x series that Ubuntu 26.04 ships (§10), verified as 2.52.3 on the development machine. The exact release that introduced the fix is unverified — see §13.
+
+#### Drag-and-drop
+
+The whole editor pane is a drop target, driven entirely by the native `enter`/`over`/`drop`/`leave` lifecycle — no DOM `dragover`/`drop` listeners, since Tauri's native file-drop (`dragDropEnabled: true`, the unchanged default) already models hover affordance via the `over` event's position data. Hover state uses `data-drag-over`, matching the tree's existing move-drag pattern (§4).
+
+Because `onDragDropEvent` is webview-scoped rather than element-scoped, the handler hit-tests each event's position against the editor pane's bounding rect. A drop over the tree pane is a no-op — bounds-checked away, leaving the tree's own DOM-based move-drag (§4) untouched.
+
+- **Insertion point** — the drop position, converted from `PhysicalPosition` to CM6 offset via `posAtCoords`, not the existing cursor.
+- **Multiple dropped paths** — inserted in sequence via `import_attachment`, each producing its own reference at the drop position.
+- **Non-image paths** (including `.md` files and folders) — rejected per-path by the same magic-byte sniff `import_attachment` applies to any import, surfaced as a captured error string naming the file. A `.md` drop is a plausible "import this note" gesture; this feature does not implement it, and the rejection is deliberately comprehensible rather than a silent no-op.
+
+**Version floor:** the Wayland drag-drop bugs (wry#11282, wry#9725) are fixed in wry 0.47.0; this repo pins wry 0.55.1, well past the fix — no caveat needed for §13.
+
+#### Toolbar file picker
+
+🖼 becomes a **menu** — "Insert image URL…" / "Attach image file…" — dismissed like `TreeContextMenu` (click-away, Escape, or item selection). This is the toolbar's first exception to §5's flat-row-no-dropdowns framing, justified because one glyph now maps to two distinct actions with no natural default for a bare click. `dialog:default` already covers the file-open dialog; no new capability grant is needed.
+
+"Attach image file…" resolves like `insertNoteLink` — no placeholder, one insert once `write_attachment` resolves, cursor placed after. A failed write inserts nothing, leaves the cursor where the user left it, and surfaces a captured error string in local state (matching `NotesPanel`'s `delete_item` failure handling), not a toast. No keyboard shortcut, matching 🖼's and 🔖's existing shortcut-free precedent. 🖼 disables while a write is in flight, in addition to the existing `view === null` rule.
+
+### 11.2 Storage
+
+One per-root **`.attachments/`** directory, created on demand inside `write_attachment`/`import_attachment` via `fs::create_dir_all` — never through `create_folder`, so the empty-directory gap (§9.4) never applies: a file write always follows in the same call.
+
+Dot-prefixed, so `list_tree` (`src-tauri/src/tree.rs:37`) and search (`src-tauri/src/search.rs:227`) already skip it with no new code, and `resolve_path_in_root` (`src-tauri/src/config.rs:121`) already accepts `.attachments/foo.png` as two `Normal` path components.
+
+**Filenames** — `<ULID>-<original-name>.<ext>`, collision-free by construction (avoiding the duplicate-title problem §3 solves for note titles). A pasted image has no original name, so it becomes `<ULID>-pasted.<ext>`.
+
+**Binaries are committed to git plainly.** No Git LFS, no size cap — ruled out for a single-user vault (§ Out of scope on the map).
+
+### 11.3 IPC command surface
+
+| Command | Signature | Notes |
+|---|---|---|
+| `write_attachment` | `(root_id, bytes, original_name) -> Result<String, String>` | Backend generates the ULID, mirroring `create_note`. Returns the `attachment:<ULID>` reference to insert. |
+| `import_attachment` | `(root_id, absolute_path) -> Result<String, String>` | Reads the file server-side, then mirrors `write_attachment` exactly (same sniffing, same ULID generation, same `.attachments/` write, same sync trigger). |
+| `read_attachment` | `(root_id, id) -> Result<tauri::ipc::Response, String>` | Raw bytes. Resolves the ULID via a directory-list prefix-match on `.attachments/` — no content scan needed, unlike `note:` link resolution. |
+
+**`read_attachment` must return `tauri::ipc::Response`, not `Vec<u8>`.** Tauri's blanket `impl<T: Serialize> IpcResponse for T` serializes a byte vector to a JSON array of numbers — measured at **4.43x inflation** on a real PNG — whereas `Response::new` delivers an `ArrayBuffer` to JS via `InvokeResponseBody::Raw`. The frontend mints a `blob:` URL from that `ArrayBuffer` with `createObjectURL` — a zero-copy reference, whereas `data:` would require re-encoding bytes already in hand to base64 for no benefit ([#66](https://github.com/IgorKvasn/note-taker/issues/66)).
+
+`import_attachment` is a deliberate, narrow exception to §9.2's rule that absolute paths never cross the IPC boundary — shared plumbing between drag-and-drop and the `text/uri-list` paste case, rather than widening a general-purpose filesystem plugin's scope allowlist.
+
+- **Validation** — magic-byte sniffing server-side against an allowed set (PNG/JPEG/GIF/WebP). Neither a client-supplied extension nor a client-supplied MIME type is trusted.
+- **Sync chain** — `write_attachment` and `import_attachment` trigger it the same as every other mutation (§9.4), skipping the §3 title validation (attachment filenames are app-generated, not user-typed).
+- **Commit granularity** — not forced to one commit with the following note save. The existing coalescing queue only merges triggers that arrive while a sync is already in flight, so an attachment write immediately followed by a note save may land as one commit or two depending on timing. Two commits is an accepted, explicit outcome, not a bug.
+
+### 11.4 Rendering
+
+Markdown reference: a custom **`attachment:<ULID>`** scheme, resolved by the app exactly as `note:` links are (§9.2). Immune to note moves. **Accepted gap:** raw `.md` will not render `attachment:` images outside this app (GitHub, Obsidian) — see §12.
+
+The sanitizer and URL transform widen symmetrically, not identically to `note:`:
+
+| Scheme | Allowed on `href` | Allowed on `src` |
+|---|---|---|
+| `note:` | yes | no (unchanged) |
+| `attachment:` | no (not a navigation target) | yes |
+
+`allowNoteSchemeUrl` (`src/components/NoteView.tsx`) extends from a single allowed scheme to a set containing both `note:` and `attachment:`, deferring every other URL to the stock `defaultUrlTransform`. `SANITIZE_SCHEMA.protocols.src` gains `attachment:`; `protocols.href` is unchanged. Because the rendered `src` is a `blob:` URL minted by the app's own code at render time rather than a value taken from markdown, it cannot be forged by a synced note — a secondary security property `data:` would not have had.
+
+**The `img` override.** A new `Attachment` component (sibling to `NoteLink`) replaces `img`. Resolution is **async and owned above `NoteView`** — a resolver prop, not a component-local hook — caching blob URLs by `(rootId, id)` and revoking on cache eviction or root change rather than on every `NoteView` unmount. `NoteView` unmounts on every Edit↔Preview toggle (`NoteEditor.tsx:432`), and `StrictMode` is on (`main.tsx:7`); tying revocation to unmount would thrash `createObjectURL`/`revokeObjectURL` on every toggle and interacts badly with StrictMode's double-invoked effects. Create-and-revoke live in the same effect.
+
+Three distinct render states, each visually distinct so a slow sync is never mistaken for a permanently-missing file:
+
+| State | Rendering |
+|---|---|
+| Resolved | The image, via a cached `blob:` URL |
+| Loading (IPC round trip in flight) | A dashed-box placeholder, neutral/pulsing style, no title tooltip |
+| Missing (`data-testid="broken-attachment"`) | A dashed-box placeholder, distinct style from `broken-note-link`, with a title tooltip |
+
+`csp: null` (`src-tauri/tauri.conf.json`) is unaffected by any of this — it injects no CSP at all today, so there is nothing for a `blob:` `src` to violate.
+
+**Accepted gap:** the 🖼 button's typed-URL path is unchanged, so remote `http(s)` image URLs remain allowed in `src` — a synced note can still phone home to an arbitrary host on render. Status quo, not revisited here.
+
+### 11.5 Edit mode
+
+Raw markdown text only — `![alt](attachment:<ULID>)` is visible as-typed. Images render in view mode, not edit mode. **No CM6 inline image widget in v1** — deliberately deferred, not an oversight: `markdownLivePreview.ts` already does inline CM6 decoration, so the machinery to add it later exists.
+
+Also deliberately absent from v1, for the same reason (no design decision made yet, not a gap in this one): image resizing, dimensions, or alt-text UX beyond the plain `![alt](...)` markdown; fetching a pasted or dropped remote URL into the vault rather than leaving it as a live `http(s)` reference; and referencing an attachment from a root other than the one that owns it (`note:` links are already same-root by design, and attachments haven't been examined against a cross-root case).
+
+### 11.6 Cleanup
+
+A scan for unreferenced attachments runs automatically in the background **on app start** and **on switching a note to preview mode**, plus a manual trigger button in the Settings dialog. These triggers are locked, not reopened by the guards below ([#70](https://github.com/IgorKvasn/note-taker/issues/70)).
+
+> **Automatic deletion can race a `git pull`.** A pull can bring an attachment before the note referencing it, or land in a root that hasn't synced yet; a naive scan would see it as unreferenced and delete it, permanently breaking the note the next time it arrives. This is the same shape §9.5 already refused for ID backfill during the tree walk — a read command must not write, and here a background scan must not delete based on an incomplete view.
+
+- **What counts as a reference** — a hand-rolled substring scan for `attachment:<ULID>` in note body text, frontmatter excluded, no fenced-code-block awareness. Mirrors the `note:` link scan (`links.rs:56-80`) exactly, accepting the same rare-false-negative risk (a bare ULID inside a code fence) for consistency.
+- **Pull-race guard** — a **24-hour grace period on the attachment file's own mtime**. `git checkout`/`pull` sets mtime to "now" for any file it writes, so a freshly-pulled attachment's clock starts at pull time — exactly the window that needs protecting.
+- **Unsaved buffers** — the scan command takes an optional extra parameter: the currently-open note's live buffer content. Its `attachment:` references count as live alongside the full-root disk scan, so an on-screen-only reference isn't treated as orphaned. Omitted at app start, when no note is open yet.
+- **Trigger frequency** — scanned once per session, on app start and the first preview-mode switch, then cached. Each `save_note` incrementally updates the cache by re-extracting just that note's own reference set, rather than a full-root rescan per save.
+- **Commit granularity** — an ordinary mutation through the existing sync chain (§7): same `git add -A`, same commit message as every other sync. No special-casing.
+- **Visibility** — background cleanup (start, preview-switch) is silent, no toast. The Settings-button trigger shows a confirmation dialog first ("N unused attachments, X MB — Delete?"), sharing the same guards as background cleanup (no more-aggressive mode because a human asked), followed by a completion toast.
+
+### 11.7 Cross-references
+
+- **§5 (toolbar)** — 🖼 is the one button that opens a menu rather than acting directly; see §11.1.
+- **§9.4 (command surface)** — `write_attachment`, `import_attachment`, `read_attachment` join the existing table; see §11.3.
+- **§12 (accepted gaps)** — every gap from this section is consolidated there.
+
+---
+
+## 12. Accepted gaps
 
 Consolidated from the sections above — each is a deliberate decision with rationale in its ticket, not an oversight.
 
@@ -381,18 +511,25 @@ Consolidated from the sections above — each is a deliberate decision with rati
 | Editor highlights sub/superscript/emoji that view mode won't render; view mode renders footnotes the editor won't highlight | §5 |
 | No auto-update — manual `dpkg -i` per release | §10 |
 | Only Ubuntu 26.04 supported — the `.deb` will not install on 22.04 or 24.04 | §10 |
+| Raw `.md` will not render `attachment:` images in GitHub, Obsidian, or any other markdown viewer | §11 |
+| Automatic attachment cleanup can race a `git pull` bringing in a note after its attachment already looked unreferenced (mitigated by a 24h mtime grace period, not eliminated) | §11 |
+| No size cap on attachments, and no Git LFS | §11 |
+| Remote `http(s)` image URLs remain allowed in `src` — a synced note can phone home to an arbitrary host on render | §11 |
+| No CM6 inline image preview in edit mode — images render in view mode only | §11 |
 
 ---
 
-## 12. Unverified assumptions
+## 13. Unverified assumptions
 
-Flagged during packaging research and not settled from primary sources ([#13](https://github.com/IgorKvasn/note-taker/issues/13)). None blocks implementation; the first is worth a smoke test if the updater is ever adopted.
+Flagged during packaging and attachment research and not settled from primary sources ([#13](https://github.com/IgorKvasn/note-taker/issues/13), [#66](https://github.com/IgorKvasn/note-taker/issues/66), [#67](https://github.com/IgorKvasn/note-taker/issues/67)). None blocks implementation; the first is worth a smoke test if the updater is ever adopted.
 
 - Deb-updater end-to-end behavior, especially `dpkg -i` over a running app.
 - Whether the Tauri CLI validates `version` as strict semver.
 - `libsoup3` coupling is inferred from WebKitGTK packaging, not stated on a Tauri page.
 - No official minimum Ubuntu version from Tauri; targeting 26.04 is our support policy, not a documented floor.
 - GitHub Pages as apt hosting is reasoned from apt's static-HTTP requirements, not documented as supported.
+- The exact WebKitGTK release that fixed clipboard image paste (WebKit bug 218519) is inferred from the bug thread, not a release-notes citation; the supported-platform version (2.52.3 on Ubuntu 26.04) is independently confirmed as past the fix, but the precise floor is not.
+- No in-webview benchmark of `blob:` vs `data:` decode/retention behavior was run; the 4.43x JSON-inflation figure is a measured serialization ratio, not an end-to-end render timing.
 
 ---
 
@@ -412,5 +549,13 @@ Flagged during packaging research and not settled from primary sources ([#13](ht
 | [11](https://github.com/IgorKvasn/note-taker/issues/11) | Search across notes |
 | [12](https://github.com/IgorKvasn/note-taker/issues/12) | Tauri backend architecture: file-watching and IPC surface |
 | [13](https://github.com/IgorKvasn/note-taker/issues/13) | .deb packaging pipeline |
+| [65](https://github.com/IgorKvasn/note-taker/issues/65) | Map: Image attachments in notes |
+| [66](https://github.com/IgorKvasn/note-taker/issues/66) | `blob:` vs `data:` URLs for attachment rendering |
+| [67](https://github.com/IgorKvasn/note-taker/issues/67) | Clipboard image paste in a Tauri v2 webview |
+| [68](https://github.com/IgorKvasn/note-taker/issues/68) | The attachment IPC command surface |
+| [69](https://github.com/IgorKvasn/note-taker/issues/69) | Sanitizer, urlTransform, and the img component for `attachment:` |
+| [70](https://github.com/IgorKvasn/note-taker/issues/70) | Making automatic attachment cleanup survivable |
+| [71](https://github.com/IgorKvasn/note-taker/issues/71) | The toolbar Image button with three entry points |
+| [72](https://github.com/IgorKvasn/note-taker/issues/72) | Drag-and-drop an image onto the editor |
 
 Supporting research: [`docs/research/markdown-rendering-library.md`](research/markdown-rendering-library.md), [`docs/research/deb-packaging.md`](research/deb-packaging.md).
