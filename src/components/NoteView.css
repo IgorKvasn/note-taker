@@ -71,30 +71,3 @@
   text-decoration: line-through;
   cursor: default;
 }
-
-.note-view__attachment-placeholder {
-  display: inline-block;
-  min-width: 120px;
-  min-height: 80px;
-  border: 1px dashed var(--border-color);
-  border-radius: 4px;
-  vertical-align: middle;
-}
-
-/* Neutral/pulsing: an IPC round trip is in flight, not a permanently missing
-   file -- must read as distinct from the broken state below at a glance. */
-.note-view__attachment-placeholder--loading {
-  background-color: var(--surface-sunken);
-  animation: attachment-loading-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes attachment-loading-pulse {
-  50% {
-    opacity: 0.5;
-  }
-}
-
-.note-view__attachment-placeholder--broken {
-  border-color: var(--danger-color, #d94a4a);
-  background-color: transparent;
-}

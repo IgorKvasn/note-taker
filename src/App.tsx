@@ -10,7 +10,6 @@ import { RootsEditor } from "./components/RootsEditor";
 import { Spinner } from "./components/Spinner";
 import { SplitPane } from "./components/SplitPane";
 import { UpdateNotice } from "./components/UpdateNotice";
-import { useAttachmentResolver } from "./hooks/useAttachmentResolver";
 import { useUiState } from "./hooks/useUiState";
 import { isDescendantPath } from "./paths";
 import {
@@ -42,11 +41,6 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [configOutcome, setConfigOutcome] = useState<ConfigOutcome | null>(null);
   const [openNote, setOpenNote] = useState<{ rootId: string; path: string; scrollToOffset?: number } | null>(null);
-  // Cached above `NoteEditor`, which remounts on every note switch (its `key`
-  // prop below), so a resolved attachment survives switching between notes in
-  // the same root -- see `useAttachmentResolver`. `""` when nothing is open is
-  // harmless: `NoteEditor` isn't rendered in that state either.
-  const resolveAttachment = useAttachmentResolver(openNote?.rootId ?? "");
   const {
     state: uiState,
     isLoaded: isUiStateLoaded,
@@ -258,7 +252,6 @@ export function App() {
                 onOpenError={handleOpenNoteError}
                 scrollToOffset={openNote.scrollToOffset}
                 onOpenNoteLink={openNoteHandler}
-                resolveAttachment={resolveAttachment}
               />
             </Suspense>
           )

@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Annotation, EditorState, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -9,7 +8,6 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   COMMAND_MARK_RESOLVED,
   COMMAND_OPEN_NOTE,
-  COMMAND_PICK_IMAGE_FILE,
   COMMAND_SAVE_NOTE,
   EVENT_SYNC_STATUS,
   type EditorMode,
@@ -22,12 +20,6 @@ import { NoteToolbar } from "./NoteToolbar";
 import { BacklinksSection } from "./BacklinksSection";
 import { useNoteLinks } from "../hooks/useNoteLinks";
 import { Spinner } from "./Spinner";
-import {
-  firstFilePathFromUriList,
-  importAttachmentPath,
-  insertAttachmentReference,
-  writeAttachmentFile,
-} from "./attachmentEntry";
 import "./NoteEditor.css";
 
 // Code-split alongside the editor itself: the markdown renderer and its syntax
@@ -317,10 +309,6 @@ interface NoteEditorProps {
    * other command uses (spec §9.2).
    */
   onOpenNoteLink?: (rootId: string, path: string) => void;
-  /** Resolves `attachment:` image references for the preview pane; owned in
-   * `App.tsx` so a resolved blob URL survives this component's remount on
-   * every note switch (spec §11.4). */
-  resolveAttachment?: (id: string) => string | null | undefined;
 }
 
 /**
@@ -337,7 +325,6 @@ export function NoteEditor({
   onOpenError,
   scrollToOffset,
   onOpenNoteLink,
-  resolveAttachment,
 }: NoteEditorProps) {
   const { linkableNotes, resolveNoteLink, getBacklinks } = useNoteLinks(rootId);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -368,13 +355,6 @@ export function NoteEditor({
   const [isLoading, setIsLoading] = useState(true);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  // Disables the toolbar's 🖼 button while any attach (paste, drop, or picker)
-  // is in flight, in addition to the existing `view === null` rule (spec §11.1).
-  const [isAttaching, setIsAttaching] = useState(false);
-  // Hover affordance for a native drag over the editor pane, matching the
-  // tree's own move-drag `data-drag-over` convention (spec §11.1, §4).
-  const [isDragOver, setIsDragOver] = useState(false);
   // The open note's own frontmatter id (always non-empty -- `open_note`
   // backfills one), used to look up who links here (issue #50).
   const [noteId, setNoteId] = useState<string | null>(null);
@@ -438,50 +418,6 @@ export function NoteEditor({
           keymap.of([...noteEditorKeymap, ...defaultKeymap, ...historyKeymap]),
           markdown({ base: markdownLanguage }),
           markdownLivePreview,
-          EditorView.domEventHandlers({
-            paste: (event, pasteView) => {
-              // Runs before CM6's own paste handling: must decide
-              // synchronously whether to claim the event (spec §11.1).
-              // Clipboard image paste is three distinct inputs -- encoded
-              // bytes, a file:/// path, or ordinary text -- and only the
-              // first two are ours to handle; anything else falls through.
-              const clipboardData = event.clipboardData;
-              if (clipboardData === null) {
-                return false;
-              }
-
-              const imageFile = Array.from(clipboardData.files).find((file) => file.type.startsWith("image/"));
-              if (imageFile !== undefined) {
-                const pos = pasteView.state.selection.main.head;
-                setIsAttaching(true);
-                setAttachmentError(null);
-                writeAttachmentFile(rootId, imageFile)
-                  .then((reference) => insertAttachmentReference(pasteView, pos, reference))
-                  .catch((error: unknown) =>
-                    setAttachmentError(error instanceof Error ? error.message : String(error)),
-                  )
-                  .finally(() => setIsAttaching(false));
-                return true;
-              }
-
-              const uriList = clipboardData.getData("text/uri-list");
-              const filePath = uriList === "" ? null : firstFilePathFromUriList(uriList);
-              if (filePath !== null) {
-                const pos = pasteView.state.selection.main.head;
-                setIsAttaching(true);
-                setAttachmentError(null);
-                importAttachmentPath(rootId, filePath)
-                  .then((reference) => insertAttachmentReference(pasteView, pos, reference))
-                  .catch((error: unknown) =>
-                    setAttachmentError(error instanceof Error ? error.message : String(error)),
-                  )
-                  .finally(() => setIsAttaching(false));
-                return true;
-              }
-
-              return false;
-            },
-          }),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || update.transactions.some((tr) => tr.annotation(remoteContentLoad))) {
               return;
@@ -599,91 +535,6 @@ export function NoteEditor({
     };
   }, [rootId, path]);
 
-  // Native drag-and-drop (spec §11.1): `onDragDropEvent` is webview-scoped,
-  // not element-scoped, so every event's position is hit-tested against the
-  // CM6 host's own bounding rect -- a drop over the tree pane is bounds-checked
-  // away here rather than relying on any DOM dragover/drop listener, of which
-  // there are deliberately none.
-  useEffect(() => {
-    const pointInHost = (physicalX: number, physicalY: number): { x: number; y: number } | null => {
-      const host = hostRef.current;
-      if (host === null) {
-        return null;
-      }
-      const scaleFactor = window.devicePixelRatio;
-      const x = physicalX / scaleFactor;
-      const y = physicalY / scaleFactor;
-      const rect = host.getBoundingClientRect();
-      if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) {
-        return null;
-      }
-      return { x, y };
-    };
-
-    const pendingUnlisten = getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "leave") {
-        setIsDragOver(false);
-        return;
-      }
-
-      const point = pointInHost(event.payload.position.x, event.payload.position.y);
-      if (point === null) {
-        setIsDragOver(false);
-        return;
-      }
-
-      if (event.payload.type === "enter" || event.payload.type === "over") {
-        setIsDragOver(true);
-        return;
-      }
-
-      // "drop"
-      setIsDragOver(false);
-      const view = viewRef.current;
-      if (view === null) {
-        return;
-      }
-      const dropPos = view.posAtCoords(point) ?? view.state.selection.main.head;
-      const droppedPaths = event.payload.paths;
-
-      setIsAttaching(true);
-      setAttachmentError(null);
-      // Sequential, not parallel: each import's insert position is the same
-      // drop point, and inserting in sequence keeps multiple dropped files in
-      // their original order instead of racing on the offset (spec §11.1).
-      // Each path is rejected independently -- a non-image path (including a
-      // .md file or folder) doesn't abort the rest of the batch, and its
-      // error names the file rather than reading as a generic failure.
-      (async () => {
-        let insertAt = dropPos;
-        const errors: string[] = [];
-        for (const droppedPath of droppedPaths) {
-          try {
-            const reference = await importAttachmentPath(rootId, droppedPath);
-            const currentView = viewRef.current;
-            if (currentView === null) {
-              return;
-            }
-            insertAttachmentReference(currentView, insertAt, reference);
-            insertAt += `![image](${reference})`.length;
-          } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
-            errors.push(`${droppedPath}: ${message}`);
-          }
-        }
-        if (errors.length > 0) {
-          setAttachmentError(errors.join("; "));
-        }
-      })()
-        .catch((error: unknown) => setAttachmentError(error instanceof Error ? error.message : String(error)))
-        .finally(() => setIsAttaching(false));
-    });
-
-    return () => {
-      pendingUnlisten.then((unlisten) => unlisten()).catch(() => {});
-    };
-  }, [rootId]);
-
   const backlinkEntries = noteId === null ? [] : getBacklinks(noteId);
 
   const markResolved = useCallback(() => {
@@ -698,42 +549,10 @@ export function NoteEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootId, path]);
 
-  /** The 🖼 menu's "Attach image file…" action (spec §11.1): resolves like
-   * `insertNoteLink` -- no placeholder, one insert once the import resolves,
-   * cursor placed after. A failed write inserts nothing and leaves the cursor
-   * where the user left it. */
-  const attachImageFile = useCallback(() => {
-    invoke<string | null>(COMMAND_PICK_IMAGE_FILE)
-      .then((filePath) => {
-        if (filePath === null || viewRef.current === null) {
-          return;
-        }
-        const pos = viewRef.current.state.selection.main.head;
-        setIsAttaching(true);
-        setAttachmentError(null);
-        importAttachmentPath(rootId, filePath)
-          .then((reference) => {
-            if (viewRef.current !== null) {
-              insertAttachmentReference(viewRef.current, pos, reference);
-            }
-          })
-          .catch((error: unknown) => setAttachmentError(error instanceof Error ? error.message : String(error)))
-          .finally(() => setIsAttaching(false));
-      })
-      .catch((error: unknown) => setAttachmentError(error instanceof Error ? error.message : String(error)));
-  }, [rootId]);
-
   return (
     <div className="note-editor">
       <div className="note-editor__chrome">
-        {mode === "edit" && (
-          <NoteToolbar
-            view={view}
-            linkableNotes={linkableNotes}
-            onAttachImageFile={attachImageFile}
-            isAttaching={isAttaching}
-          />
-        )}
+        {mode === "edit" && <NoteToolbar view={view} linkableNotes={linkableNotes} />}
         {isConflicted && (
           <button type="button" className="note-editor__mark-resolved" onClick={markResolved}>
             Mark resolved
@@ -757,11 +576,6 @@ export function NoteEditor({
           Autosave failed, retrying: {saveError}
         </p>
       )}
-      {attachmentError !== null && (
-        <p role="alert" className="note-editor__attachment-error">
-          {attachmentError}
-        </p>
-      )}
       <div className="note-editor__body">
         {isLoading && (
           <div className="note-editor__loading">
@@ -773,7 +587,6 @@ export function NoteEditor({
           data-testid="note-editor"
           ref={hostRef}
           hidden={mode !== "edit"}
-          data-drag-over={isDragOver || undefined}
         />
         {mode === "view" && (
           <Suspense fallback={<Spinner delayed label="Loading preview…" />}>
@@ -781,7 +594,6 @@ export function NoteEditor({
               content={content}
               resolveNoteLink={resolveNoteLink}
               onOpenNoteLink={(targetPath) => onOpenNoteLink?.(rootId, targetPath)}
-              resolveAttachment={resolveAttachment}
             />
           </Suspense>
         )}

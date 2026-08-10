@@ -1,15 +1,10 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AttachmentCleanupDialog } from "./AttachmentCleanupDialog";
-import { Toast } from "./Toast";
-import { useToasts } from "../hooks/useToasts";
 import {
-  COMMAND_CLEANUP_UNUSED_ATTACHMENTS,
   COMMAND_PICK_FOLDER,
   COMMAND_SAVE_CONFIG,
   COMMAND_VALIDATE_ROOT_PATH,
   type Config,
-  type DeletedAttachment,
   type RootConfig,
   type RootDraft,
   type RootValidation,
@@ -73,55 +68,9 @@ export function RootsEditor({ initialRoots, canCancel, onSaved, onCancel }: Root
   const [rows, setRows] = useState<RootRow[]>(() => initialRoots.map((root) => toRow(root, true)));
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [cleanupTarget, setCleanupTarget] = useState<{ rootId: string; candidates: DeletedAttachment[] } | null>(
-    null,
-  );
-  const [isCleaningUp, setIsCleaningUp] = useState(false);
-  const [cleanupError, setCleanupError] = useState<string | null>(null);
-  const { toasts, showToast } = useToasts();
 
   const duplicatePaths = findDuplicatePaths(rows);
   const canSave = rows.length > 0 && !isSaving && duplicatePaths.size === 0;
-
-  async function handleCleanupRequest(rootId: string) {
-    setCleanupError(null);
-    try {
-      const candidates = await invoke<DeletedAttachment[]>(COMMAND_CLEANUP_UNUSED_ATTACHMENTS, {
-        rootId,
-        openBufferContent: null,
-        dryRun: true,
-      });
-      if (candidates.length === 0) {
-        showToast("No unused attachments found.");
-        return;
-      }
-      setCleanupTarget({ rootId, candidates });
-    } catch (error) {
-      setCleanupError(String(error));
-    }
-  }
-
-  async function handleCleanupConfirm() {
-    if (cleanupTarget === null) {
-      return;
-    }
-    setIsCleaningUp(true);
-    try {
-      const deleted = await invoke<DeletedAttachment[]>(COMMAND_CLEANUP_UNUSED_ATTACHMENTS, {
-        rootId: cleanupTarget.rootId,
-        openBufferContent: null,
-        dryRun: false,
-      });
-      const totalMb = (deleted.reduce((sum, item) => sum + item.size_bytes, 0) / (1024 * 1024)).toFixed(1);
-      showToast(`Deleted ${deleted.length} unused attachment${deleted.length === 1 ? "" : "s"} (${totalMb} MB).`);
-      setCleanupTarget(null);
-    } catch (error) {
-      setCleanupError(String(error));
-      setCleanupTarget(null);
-    } finally {
-      setIsCleaningUp(false);
-    }
-  }
 
   async function handleAdd() {
     const path = await invoke<string | null>(COMMAND_PICK_FOLDER);
@@ -220,16 +169,6 @@ export function RootsEditor({ initialRoots, canCancel, onSaved, onCancel }: Root
                   Create this folder
                 </label>
               )}
-              {row.id !== null && (
-                <button
-                  className="roots-editor__cleanup"
-                  type="button"
-                  onClick={() => handleCleanupRequest(row.id ?? "")}
-                  aria-label={`Clean up unused attachments in ${row.path}`}
-                >
-                  Clean up attachments…
-                </button>
-              )}
               <button
                 className="roots-editor__remove"
                 type="button"
@@ -279,12 +218,6 @@ export function RootsEditor({ initialRoots, canCancel, onSaved, onCancel }: Root
         </p>
       )}
 
-      {cleanupError !== null && (
-        <p className="roots-editor__error" role="alert">
-          {cleanupError}
-        </p>
-      )}
-
       <div className="roots-editor__actions">
         {canCancel && (
           <button type="button" onClick={onCancel} disabled={isSaving}>
@@ -300,17 +233,6 @@ export function RootsEditor({ initialRoots, canCancel, onSaved, onCancel }: Root
           {isSaving ? "Saving…" : "Save"}
         </button>
       </div>
-
-      {cleanupTarget !== null && (
-        <AttachmentCleanupDialog
-          candidates={cleanupTarget.candidates}
-          isDeleting={isCleaningUp}
-          onConfirm={handleCleanupConfirm}
-          onCancel={() => setCleanupTarget(null)}
-        />
-      )}
-
-      <Toast toasts={toasts} />
     </div>
   );
 }
