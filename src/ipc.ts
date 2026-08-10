@@ -26,6 +26,9 @@ export const COMMAND_SYNC_ROOT = "sync_root";
 export const COMMAND_GET_ROOT_STATUS = "get_root_status";
 export const COMMAND_MARK_RESOLVED = "mark_resolved";
 export const COMMAND_CHECK_FOR_UPDATE = "check_for_update";
+export const COMMAND_PICK_IMAGE_FILE = "pick_image_file";
+export const COMMAND_WRITE_ATTACHMENT = "write_attachment";
+export const COMMAND_READ_ATTACHMENT = "read_attachment";
 
 /** Emitted by the backend git sync chain (spec §7); one-way, never invoked. */
 export const EVENT_SYNC_STATUS = "sync-status";
@@ -171,4 +174,15 @@ export interface ReleaseInfo {
   version: string;
   notes: string;
   url: string;
+}
+
+/**
+ * Mirrors `PickedFile` in `src-tauri/src/lib.rs`, returned by `pick_image_file`.
+ * `bytes` arrives as a plain JSON number array (ordinary `serde::Serialize`,
+ * not a binary `tauri::ipc::Response`) -- fine for a picked file's size, unlike
+ * `read_attachment`'s response (spec §11.3).
+ */
+export interface PickedFile {
+  name: string;
+  bytes: number[];
 }

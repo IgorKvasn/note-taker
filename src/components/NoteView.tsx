@@ -3,6 +3,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import { ATTACHMENT_PROTOCOL, ATTACHMENT_SCHEME, BROKEN_ATTACHMENT_TITLE, attachmentTarget } from "./attachments";
 import { copyToClipboard } from "./clipboard";
 import { Toast } from "./Toast";
 import { useToasts } from "../hooks/useToasts";
@@ -11,10 +12,12 @@ import "./NoteView.css";
 
 /**
  * Rendered notes are untrusted input -- they arrive by git from other machines
- * (spec §9.2) -- so this widens `defaultSchema` by exactly two things: the
- * `hljs` class names syntax highlighting needs, and the `note:` href protocol
- * carrying a cross-note link's ULID. `src` is deliberately left alone, so
- * `![alt](note:...)` stays blocked; only anchors may use the scheme.
+ * (spec §9.2) -- so this widens `defaultSchema` by exactly two custom URL
+ * schemes, each restricted to the one attribute it's meant for: `note:` on
+ * `href` (a cross-note link's ULID; unchanged) and `attachment:` on `src` (an
+ * attached image's ULID) -- asymmetric by design, since an attachment is
+ * never a navigation target and a note link is never an image source (spec
+ * §11.4). Also widens `hljs` class names for syntax highlighting.
  */
 const SANITIZE_SCHEMA = {
   ...defaultSchema,
@@ -25,21 +28,23 @@ const SANITIZE_SCHEMA = {
   protocols: {
     ...defaultSchema.protocols,
     href: [...(defaultSchema.protocols?.href ?? []), NOTE_LINK_SCHEME],
+    src: [...(defaultSchema.protocols?.src ?? []), ATTACHMENT_SCHEME],
   },
 };
 
 /**
  * `react-markdown` blanks any URL outside its own hardcoded protocol list
  * *before* rehype plugins run, so widening `SANITIZE_SCHEMA` alone is not
- * enough to let a `note:` href through. This lets exactly that scheme past and
- * defers every other URL to the stock transform.
+ * enough to let a `note:`/`attachment:` URL through. This lets exactly those
+ * two schemes past and defers every other URL to the stock transform.
  *
- * It applies to `src` as well as `href`, but nothing is widened by that:
- * `SANITIZE_SCHEMA` still restricts `src` to http(s), so an
- * `![alt](note:...)` image is stripped downstream.
+ * Each scheme is let through regardless of which attribute it appears on --
+ * `SANITIZE_SCHEMA`'s per-attribute protocol lists are what actually keep
+ * `attachment:` off `href` and `note:` off `src`, so nothing is widened here
+ * by not distinguishing.
  */
 function allowNoteSchemeUrl(url: string): string {
-  return url.startsWith(NOTE_LINK_PROTOCOL) ? url : defaultUrlTransform(url);
+  return url.startsWith(NOTE_LINK_PROTOCOL) || url.startsWith(ATTACHMENT_PROTOCOL) ? url : defaultUrlTransform(url);
 }
 
 interface NoteViewProps {
@@ -51,6 +56,18 @@ interface NoteViewProps {
    */
   resolveNoteLink?: (id: string) => string | null;
   onOpenNoteLink?: (path: string) => void;
+  /**
+   * Resolves an `attachment:` src's ULID to a displayable image URL (a cached
+   * blob URL), triggering the underlying fetch as a side effect if this is
+   * the first time this ID has been seen. `undefined` means resolution is in
+   * flight; `null` means it's been tried and the attachment isn't found.
+   *
+   * Owned above `NoteView` (`App.tsx`, not this component) since `NoteView`
+   * itself remounts on every edit/preview toggle -- a cache living here would
+   * refetch and re-mint object URLs on every toggle instead of once per
+   * attachment (spec §11.4).
+   */
+  resolveAttachment?: (id: string) => string | null | undefined;
 }
 
 interface CopyableBlockProps {
@@ -145,7 +162,48 @@ function NoteLink({ href, children, resolveNoteLink, onOpenNoteLink, ...anchorPr
   );
 }
 
-export function NoteView({ content, resolveNoteLink, onOpenNoteLink }: NoteViewProps) {
+interface AttachmentProps extends React.ComponentPropsWithoutRef<"img"> {
+  resolveAttachment: ((id: string) => string | null | undefined) | undefined;
+}
+
+/**
+ * Renders an `img`, giving `attachment:` srcs cached-blob-URL resolution and
+ * leaving every other src exactly as it was (there is currently no other
+ * image src an untrusted note could carry past the sanitizer, but this stays
+ * symmetric with `NoteLink` regardless).
+ *
+ * Three states, distinct from `NoteLink`'s two: resolved (the image),
+ * loading (resolution hasn't settled yet -- a neutral placeholder, since a
+ * "broken" look would be misleading for something that just hasn't loaded),
+ * and missing (styled and labelled distinctly from a broken note link, since
+ * the causes -- and what a fix looks like -- differ).
+ */
+function Attachment({ src, alt, resolveAttachment, ...imgProps }: AttachmentProps) {
+  const targetId = attachmentTarget(src);
+  if (targetId === null) {
+    // eslint-disable-next-line jsx-a11y/alt-text -- alt is spread in via imgProps.
+    return <img src={src} alt={alt} {...imgProps} />;
+  }
+
+  // No resolver at all is treated as missing, not loading -- `undefined` is
+  // otherwise reserved for "resolution is in flight", which only applies
+  // when there's a resolver to eventually settle it.
+  const resolved = resolveAttachment === undefined ? null : resolveAttachment(targetId);
+  if (resolved === undefined) {
+    return <span className="note-view__attachment-loading" data-testid="loading-attachment" />;
+  }
+  if (resolved === null) {
+    return (
+      <span className="note-view__broken-attachment" title={BROKEN_ATTACHMENT_TITLE} data-testid="broken-attachment">
+        {alt || "Image"}
+      </span>
+    );
+  }
+
+  return <img {...imgProps} src={resolved} alt={alt} className="note-view__attachment" data-testid="attachment" />;
+}
+
+export function NoteView({ content, resolveNoteLink, onOpenNoteLink, resolveAttachment }: NoteViewProps) {
   const { toasts, showToast } = useToasts();
 
   return (
@@ -169,6 +227,9 @@ export function NoteView({ content, resolveNoteLink, onOpenNoteLink }: NoteViewP
             <NoteLink {...anchorProps} resolveNoteLink={resolveNoteLink} onOpenNoteLink={onOpenNoteLink}>
               {children}
             </NoteLink>
+          ),
+          img: ({ node: _node, ...imgProps }) => (
+            <Attachment {...imgProps} resolveAttachment={resolveAttachment} />
           ),
         }}
       >

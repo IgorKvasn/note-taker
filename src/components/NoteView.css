@@ -71,3 +71,30 @@
   text-decoration: line-through;
   cursor: default;
 }
+
+.note-view__attachment {
+  max-width: 100%;
+}
+
+/* Resolution hasn't settled yet -- a neutral placeholder, deliberately not
+   styled like a broken attachment, since most of the time this state is only
+   visible for a moment. */
+.note-view__attachment-loading {
+  display: inline-block;
+  width: 2em;
+  height: 2em;
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+
+/* An attachment: reference whose file isn't found. Dotted-border box rather
+   than the broken-note-link's strikethrough, so the two failure states read
+   as visually distinct at a glance (a missing image vs. a dead cross-link). */
+.note-view__broken-attachment {
+  display: inline-block;
+  padding: 0.15em 0.5em;
+  color: var(--text-muted);
+  border: 1px dashed var(--text-muted);
+  border-radius: 4px;
+  cursor: default;
+}

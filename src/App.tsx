@@ -10,6 +10,7 @@ import { RootsEditor } from "./components/RootsEditor";
 import { Spinner } from "./components/Spinner";
 import { SplitPane } from "./components/SplitPane";
 import { UpdateNotice } from "./components/UpdateNotice";
+import { useAttachmentResolver } from "./hooks/useAttachmentResolver";
 import { useUiState } from "./hooks/useUiState";
 import { isDescendantPath } from "./paths";
 import {
@@ -51,6 +52,7 @@ export function App() {
     setEditorMode,
   } = useUiState();
   const hasRestoredOpenNote = useRef(false);
+  const { resolveAttachment } = useAttachmentResolver(openNote?.rootId ?? null);
   const [showLocalOnlyNotice, setShowLocalOnlyNotice] = useState(false);
   const [availableUpdates, setAvailableUpdates] = useState<ReleaseInfo[]>([]);
   const [isUpdateNoticeDismissed, setIsUpdateNoticeDismissed] = useState(false);
@@ -252,6 +254,7 @@ export function App() {
                 onOpenError={handleOpenNoteError}
                 scrollToOffset={openNote.scrollToOffset}
                 onOpenNoteLink={openNoteHandler}
+                resolveAttachment={resolveAttachment}
               />
             </Suspense>
           )

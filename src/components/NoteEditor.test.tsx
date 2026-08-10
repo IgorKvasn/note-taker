@@ -931,6 +931,94 @@ describe("NoteEditor", () => {
     });
   });
 
+  describe("image attachment (issue #75)", () => {
+    it("writes the picked file and inserts an attachment: reference at the cursor, cursor placed after", async () => {
+      const user = userEvent.setup();
+      mockInvoke({
+        pick_image_file: { name: "photo.png", bytes: [1, 2, 3] },
+        write_attachment: "attachment:01ABC",
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard("{End}");
+
+      await user.click(screen.getByTitle("Image"));
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("write_attachment", {
+          rootId: "01ROOT",
+          bytes: [1, 2, 3],
+          originalName: "photo.png",
+        }),
+      );
+      await waitFor(() => expect(editable.textContent).toBe("Loaded![photo.png](attachment:01ABC)"));
+      // CodeMirror focuses the editor as part of placing the cursor there.
+      expect(document.activeElement?.className).toContain("cm-content");
+    });
+
+    it("inserts nothing and leaves the cursor untouched when the dialog is cancelled", async () => {
+      const user = userEvent.setup();
+      mockInvoke({ pick_image_file: null });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+
+      await user.click(screen.getByTitle("Image"));
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("pick_image_file"));
+      expect(editable.textContent).toBe("Loaded");
+      expect(invoke).not.toHaveBeenCalledWith("write_attachment", expect.anything());
+    });
+
+    it("inserts nothing and surfaces the error inline (not a toast) when the write fails", async () => {
+      const user = userEvent.setup();
+      invoke.mockImplementation((command: string) => {
+        if (command === "open_note") {
+          return Promise.resolve({ content: "Loaded\n", id: "01LOADED", is_conflicted: false });
+        }
+        if (command === "pick_image_file") {
+          return Promise.resolve({ name: "photo.png", bytes: [1, 2, 3] });
+        }
+        if (command === "write_attachment") {
+          return Promise.reject(new Error("not a recognized image format"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+
+      await user.click(screen.getByTitle("Image"));
+
+      expect(await screen.findByRole("alert")).toHaveProperty(
+        "textContent",
+        expect.stringContaining("not a recognized image format"),
+      );
+      expect(editable.textContent).toBe("Loaded");
+    });
+
+    it("disables the image button for the duration of the pick+write", async () => {
+      const user = userEvent.setup();
+      let resolvePick: (value: { name: string; bytes: number[] } | null) => void = () => {};
+      mockInvoke({
+        pick_image_file: new Promise((resolve) => {
+          resolvePick = resolve;
+        }),
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByRole("textbox");
+
+      await user.click(screen.getByTitle("Image"));
+      expect(screen.getByTitle("Image").hasAttribute("disabled")).toBe(true);
+
+      resolvePick(null);
+      await waitFor(() => expect(screen.getByTitle("Image").hasAttribute("disabled")).toBe(false));
+    });
+  });
+
   describe("backlinks (issue #50)", () => {
     function mockScanLinks(scanLinks: Record<string, unknown>) {
       mockInvoke({ scan_links: scanLinks });

@@ -8,12 +8,16 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   COMMAND_MARK_RESOLVED,
   COMMAND_OPEN_NOTE,
+  COMMAND_PICK_IMAGE_FILE,
   COMMAND_SAVE_NOTE,
+  COMMAND_WRITE_ATTACHMENT,
   EVENT_SYNC_STATUS,
   type EditorMode,
   type OpenNoteResult,
+  type PickedFile,
   type SyncStatusEvent,
 } from "../ipc";
+import { attachmentTarget, formatAttachment } from "./attachments";
 import { markdownLivePreview } from "./markdownLivePreview";
 import { noteEditorKeymap } from "./noteEditorKeymap";
 import { NoteToolbar } from "./NoteToolbar";
@@ -309,6 +313,12 @@ interface NoteEditorProps {
    * other command uses (spec §9.2).
    */
   onOpenNoteLink?: (rootId: string, path: string) => void;
+  /**
+   * Resolves an `attachment:` id to a displayable image URL for preview mode
+   * (issue #75). Owned by `App.tsx`, not here -- this component remounts on
+   * every note switch, so a cache living here would refetch on every switch.
+   */
+  resolveAttachment?: (id: string) => string | null | undefined;
 }
 
 /**
@@ -325,6 +335,7 @@ export function NoteEditor({
   onOpenError,
   scrollToOffset,
   onOpenNoteLink,
+  resolveAttachment,
 }: NoteEditorProps) {
   const { linkableNotes, resolveNoteLink, getBacklinks } = useNoteLinks(rootId);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -358,6 +369,11 @@ export function NoteEditor({
   // The open note's own frontmatter id (always non-empty -- `open_note`
   // backfills one), used to look up who links here (issue #50).
   const [noteId, setNoteId] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  // Disables the toolbar's image button for the duration of a pick+write, in
+  // addition to the existing view === null rule (issue #75) -- a second click
+  // mid-write would otherwise fire a second file dialog on top of the first.
+  const [isAttaching, setIsAttaching] = useState(false);
 
   /** Returns a promise that resolves once any pending autosave has been sent
    * (and settled) -- callers that need the disk write to land first (e.g.
@@ -549,10 +565,62 @@ export function NoteEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootId, path]);
 
+  /**
+   * Toolbar image button (issue #75): opens the native file picker, writes
+   * the chosen file into `.attachments/`, and inserts `![name](attachment:id)`
+   * at the cursor with the cursor placed after. A cancelled dialog and a
+   * failed write both leave the document and cursor untouched; a failed
+   * write surfaces its error in local state rather than a toast, matching
+   * `NotesPanel`'s delete-failure handling.
+   */
+  const attachImageFile = useCallback(() => {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+
+    setAttachmentError(null);
+    setIsAttaching(true);
+
+    invoke<PickedFile | null>(COMMAND_PICK_IMAGE_FILE)
+      .then((picked) => {
+        if (picked === null) {
+          return;
+        }
+        return invoke<string>(COMMAND_WRITE_ATTACHMENT, {
+          rootId,
+          bytes: picked.bytes,
+          originalName: picked.name,
+        }).then((reference) => {
+          const currentView = viewRef.current;
+          if (currentView === null) {
+            return;
+          }
+          const id = attachmentTarget(reference) ?? reference;
+          const pos = currentView.state.selection.main.head;
+          const insert = formatAttachment(picked.name, id);
+          currentView.dispatch({
+            changes: { from: pos, to: pos, insert },
+            selection: { anchor: pos + insert.length },
+          });
+          currentView.focus();
+        });
+      })
+      .catch((error: unknown) => setAttachmentError(error instanceof Error ? error.message : String(error)))
+      .finally(() => setIsAttaching(false));
+  }, [rootId]);
+
   return (
     <div className="note-editor">
       <div className="note-editor__chrome">
-        {mode === "edit" && <NoteToolbar view={view} linkableNotes={linkableNotes} />}
+        {mode === "edit" && (
+          <NoteToolbar
+            view={view}
+            linkableNotes={linkableNotes}
+            onAttachImage={attachImageFile}
+            isAttaching={isAttaching}
+          />
+        )}
         {isConflicted && (
           <button type="button" className="note-editor__mark-resolved" onClick={markResolved}>
             Mark resolved
@@ -576,6 +644,11 @@ export function NoteEditor({
           Autosave failed, retrying: {saveError}
         </p>
       )}
+      {attachmentError !== null && (
+        <p role="alert" className="note-editor__attachment-error">
+          Could not attach image: {attachmentError}
+        </p>
+      )}
       <div className="note-editor__body">
         {isLoading && (
           <div className="note-editor__loading">
@@ -594,6 +667,7 @@ export function NoteEditor({
               content={content}
               resolveNoteLink={resolveNoteLink}
               onOpenNoteLink={(targetPath) => onOpenNoteLink?.(rootId, targetPath)}
+              resolveAttachment={resolveAttachment}
             />
           </Suspense>
         )}

@@ -1,3 +1,4 @@
+mod attachments;
 mod config;
 mod gitutil;
 mod links;
@@ -62,6 +63,43 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
         .file()
         .blocking_pick_folder()
         .map(|file_path| file_path.to_string())
+}
+
+/// One file picked and read for [`write_attachment`]'s `bytes` argument.
+#[derive(Debug, Clone, serde::Serialize)]
+struct PickedFile {
+    name: String,
+    bytes: Vec<u8>,
+}
+
+/// Native image-file picker for the toolbar's "Attach image file" action
+/// (spec §11.1). Reads the chosen file's bytes server-side and hands them
+/// back to the frontend, which then calls [`write_attachment`] with them --
+/// `write_attachment` never trusts a client-supplied extension anyway, so
+/// this read-then-write split costs nothing and needs no filesystem
+/// capability beyond `dialog:default`, which already covers `pick_folder`.
+/// `None` when the user cancels the dialog.
+#[tauri::command]
+async fn pick_image_file(app: AppHandle) -> Result<Option<PickedFile>, String> {
+    let Some(file_path) = app
+        .dialog()
+        .file()
+        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+
+    let path = file_path
+        .into_path()
+        .map_err(|error| format!("could not resolve the picked file's path: {error}"))?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+
+    Ok(Some(PickedFile { name, bytes }))
 }
 
 #[tauri::command]
@@ -225,6 +263,35 @@ fn scan_links(root_id: String) -> Result<ScanLinksResult, String> {
     Ok(links::scan_links(&root_path))
 }
 
+/// Writes attachment bytes into `.attachments/` (spec §11.3), triggering the
+/// sync chain exactly like any other mutation. `original_name` is `None` for
+/// a paste with no filename to draw from; validation and ULID generation both
+/// happen inside [`attachments::write_attachment`].
+#[tauri::command]
+fn write_attachment(
+    app: AppHandle,
+    root_id: String,
+    bytes: Vec<u8>,
+    original_name: Option<String>,
+) -> Result<String, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let reference = attachments::write_attachment(&root_path, &bytes, original_name.as_deref())?;
+    trigger_sync_for_root(&app, &root_id, None);
+    Ok(reference)
+}
+
+/// Returns an attachment's raw bytes as a binary IPC response rather than a
+/// serialized byte array -- `tauri::ipc::Response` delivers an `ArrayBuffer`
+/// to JS via `InvokeResponseBody::Raw`, avoiding the ~4.4x inflation a JSON
+/// number array would cost on a real image (spec §11.3). Resolves `id` via a
+/// prefix-match listing of `.attachments/`.
+#[tauri::command]
+fn read_attachment(root_id: String, id: String) -> Result<tauri::ipc::Response, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let bytes = attachments::read_attachment(&root_path, &id)?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[tauri::command]
 fn get_state() -> UiState {
     state::get_state()
@@ -282,6 +349,7 @@ pub fn run() {
             get_config,
             validate_root_path,
             pick_folder,
+            pick_image_file,
             save_config,
             show_config_error,
             list_tree,
@@ -296,6 +364,8 @@ pub fn run() {
             mark_resolved,
             search_notes,
             scan_links,
+            write_attachment,
+            read_attachment,
             get_state,
             save_state,
             check_for_update,

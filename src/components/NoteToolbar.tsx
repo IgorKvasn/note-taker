@@ -5,7 +5,6 @@ import { NoteLinkPicker } from "./NoteLinkPicker";
 import {
   insertCodeBlock,
   insertHorizontalRule,
-  insertImage,
   insertLink,
   insertNoteLink,
   insertTable,
@@ -22,6 +21,12 @@ interface NoteToolbarProps {
   view: EditorView | null;
   /** Linkable notes in the current root; same-root only by design. */
   linkableNotes?: LinkedNote[];
+  /** Triggers the image-attach flow (file dialog, then write + insert) for
+   * the 🖼 button (issue #75). Absent (e.g. in tests) leaves it a no-op. */
+  onAttachImage?: () => void;
+  /** Disables the 🖼 button while a pick+write is already in flight, in
+   * addition to the existing `view === null` rule. */
+  isAttaching?: boolean;
 }
 
 interface ToolbarButtonSpec {
@@ -35,7 +40,12 @@ function dispatchCommand(view: EditorView, run: (view: EditorView) => void) {
   view.focus();
 }
 
-const GROUPS: ToolbarButtonSpec[][] = [
+// The last group of `GROUPS`' plain, CM6-dispatching buttons -- rendered
+// separately below, interleaved with the 🖼 button, which unlike every other
+// button here doesn't dispatch a CM6 command directly: it opens a file
+// dialog first (issue #75), so it can't be folded into this uniform
+// `ToolbarButtonSpec` shape.
+const INLINE_GROUPS: ToolbarButtonSpec[][] = [
   [
     { label: "B", title: "Bold (Ctrl/Cmd+B)", run: (view) => view.dispatch(toggleWrap(view.state, "**")) },
     { label: "I", title: "Italic (Ctrl/Cmd+I)", run: (view) => view.dispatch(toggleWrap(view.state, "_")) },
@@ -64,46 +74,72 @@ const GROUPS: ToolbarButtonSpec[][] = [
     },
     { label: "☑", title: "Task list", run: (view) => view.dispatch(toggleTaskList(view.state)) },
   ],
-  [
-    {
-      label: "❝",
-      title: "Blockquote (Ctrl/Cmd+Shift+.)",
-      run: (view) => view.dispatch(toggleBlockquote(view.state)),
-    },
-    { label: "🔗", title: "Link (Ctrl/Cmd+K)", run: (view) => view.dispatch(insertLink(view.state)) },
-    { label: "🖼", title: "Image", run: (view) => view.dispatch(insertImage(view.state)) },
-    { label: "⊞", title: "Table", run: (view) => view.dispatch(insertTable(view.state)) },
-    { label: "{ }", title: "Code block", run: (view) => view.dispatch(insertCodeBlock(view.state)) },
-    { label: "—", title: "Horizontal rule", run: (view) => view.dispatch(insertHorizontalRule(view.state)) },
-  ],
 ];
 
-export function NoteToolbar({ view, linkableNotes = [] }: NoteToolbarProps) {
+const LAST_GROUP_BEFORE_IMAGE: ToolbarButtonSpec[] = [
+  {
+    label: "❝",
+    title: "Blockquote (Ctrl/Cmd+Shift+.)",
+    run: (view) => view.dispatch(toggleBlockquote(view.state)),
+  },
+  { label: "🔗", title: "Link (Ctrl/Cmd+K)", run: (view) => view.dispatch(insertLink(view.state)) },
+];
+
+const LAST_GROUP_AFTER_IMAGE: ToolbarButtonSpec[] = [
+  { label: "⊞", title: "Table", run: (view) => view.dispatch(insertTable(view.state)) },
+  { label: "{ }", title: "Code block", run: (view) => view.dispatch(insertCodeBlock(view.state)) },
+  { label: "—", title: "Horizontal rule", run: (view) => view.dispatch(insertHorizontalRule(view.state)) },
+];
+
+function ToolbarButton({ view, button }: { view: EditorView | null; button: ToolbarButtonSpec }) {
+  return (
+    <button
+      type="button"
+      className="note-toolbar__button"
+      title={button.title}
+      disabled={view === null}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => {
+        if (view !== null) {
+          dispatchCommand(view, button.run);
+        }
+      }}
+    >
+      {button.label}
+    </button>
+  );
+}
+
+export function NoteToolbar({ view, linkableNotes = [], onAttachImage, isAttaching = false }: NoteToolbarProps) {
   const [isPickerOpen, setIsPickerOpen] = useState(false);
 
   return (
     <div className="note-toolbar" data-testid="note-toolbar">
-      {GROUPS.map((group, groupIndex) => (
+      {INLINE_GROUPS.map((group, groupIndex) => (
         <div className="note-toolbar__group" key={groupIndex}>
           {group.map((button) => (
-            <button
-              key={button.title}
-              type="button"
-              className="note-toolbar__button"
-              title={button.title}
-              disabled={view === null}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                if (view !== null) {
-                  dispatchCommand(view, button.run);
-                }
-              }}
-            >
-              {button.label}
-            </button>
+            <ToolbarButton key={button.title} view={view} button={button} />
           ))}
         </div>
       ))}
+      <div className="note-toolbar__group">
+        {LAST_GROUP_BEFORE_IMAGE.map((button) => (
+          <ToolbarButton key={button.title} view={view} button={button} />
+        ))}
+        <button
+          type="button"
+          className="note-toolbar__button"
+          title="Image"
+          disabled={view === null || isAttaching}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => onAttachImage?.()}
+        >
+          🖼
+        </button>
+        {LAST_GROUP_AFTER_IMAGE.map((button) => (
+          <ToolbarButton key={button.title} view={view} button={button} />
+        ))}
+      </div>
       <div className="note-toolbar__group">
         <button
           type="button"

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NoteToolbar } from "./NoteToolbar";
 
 describe("NoteToolbar", () => {
@@ -41,6 +41,32 @@ describe("NoteToolbar", () => {
     expect(view.state.doc.toString()).toBe("[hello](url)");
 
     view.destroy();
+  });
+
+  describe("image attach button", () => {
+    it("calls onAttachImage instead of dispatching into the editor", async () => {
+      const user = userEvent.setup();
+      const onAttachImage = vi.fn();
+      const view = new EditorView({ state: EditorState.create({ doc: "hello" }) });
+
+      render(<NoteToolbar view={view} onAttachImage={onAttachImage} />);
+      await user.click(screen.getByTitle("Image"));
+
+      expect(onAttachImage).toHaveBeenCalledOnce();
+      expect(view.state.doc.toString()).toBe("hello");
+
+      view.destroy();
+    });
+
+    it("is disabled while isAttaching is true, even with a view", () => {
+      const view = new EditorView({ state: EditorState.create({ doc: "hello" }) });
+
+      render(<NoteToolbar view={view} isAttaching />);
+
+      expect(screen.getByTitle("Image").hasAttribute("disabled")).toBe(true);
+
+      view.destroy();
+    });
   });
 
   describe("note link picker", () => {
