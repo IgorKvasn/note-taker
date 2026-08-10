@@ -222,13 +222,17 @@ fn mark_resolved(app: AppHandle, root_id: String, path: String) -> Result<(), St
 /// a background task (spec §7). A root that fails to resolve (e.g. a stale ID
 /// from a since-removed root) just skips sync silently -- the mutation itself
 /// already succeeded, and there is nothing sensible to sync. `origin_path` is
-/// forwarded to [`sync::trigger_sync`] (issue #64) -- `Some` only for `save_note`.
+/// forwarded to [`sync::trigger_sync_delayed`] (issue #64) -- `Some` only for
+/// `save_note`. Routes through the root's configured quiet period (issue #84)
+/// rather than triggering the chain immediately; every caller does so for
+/// now, including tree mutations and manual sync -- #86 is what later
+/// exempts those.
 fn trigger_sync_for_root(app: &AppHandle, root_id: &str, origin_path: Option<String>) {
     let Ok(root) = config::find_root_config(root_id) else {
         return;
     };
     let manager = app.state::<Arc<SyncManager>>().inner().clone();
-    sync::trigger_sync(app.clone(), manager, root, origin_path);
+    sync::trigger_sync_delayed(app.clone(), manager, root, origin_path);
 }
 
 /// Background attachment cleanup for every configured root, run once at

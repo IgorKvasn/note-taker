@@ -3,12 +3,17 @@
 //! `git merge` -> re-push if clean, or report `conflict` if markers remain.
 //!
 //! Save and tree-mutation commands return as soon as their filesystem work is
-//! done; this module's [`trigger_sync`] is the one call they all make to kick
-//! the chain off as a background task rather than awaiting it.
+//! done; every one of them calls [`trigger_sync_delayed`] (issue #84) to kick
+//! the chain off as a background task rather than awaiting it. That delay
+//! sits in front of [`trigger_sync`]'s own busy/pending coalescing: a trigger
+//! arms or rearms a trailing-only per-root quiet period, and only once it
+//! elapses does the immediate `trigger_sync` path actually run.
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -77,6 +82,13 @@ struct RootSyncSlot {
     /// run's own snapshot right before it starts, so a trigger arriving mid-run
     /// contributes to the *next* pass's origin set, never the one already executing.
     next_origin_paths: Mutex<Vec<String>>,
+    /// Bumped by every call to [`trigger_sync_delayed`] for this root. A
+    /// delayed task captures the value at arm time and, once its sleep
+    /// finishes, only proceeds to the immediate [`trigger_sync`] if the
+    /// generation still matches -- otherwise a later call has rearmed the
+    /// countdown and this stale task simply exits, giving trailing-only
+    /// debounce without ever cancelling the sleeping task itself.
+    delay_generation: AtomicU64,
 }
 
 impl SyncManager {
@@ -105,10 +117,12 @@ impl SyncManager {
 }
 
 /// Kicks off the sync chain for `root` as a background task and returns
-/// immediately -- callers (`save_note`, `create_note`, `create_folder`,
-/// `sync_root`) must not await this. `origin_path` is the root-relative path
-/// of the note whose save triggered this call, if any (issue #64); a trigger
-/// with no save behind it (a create, a delete, a manual sync) passes `None`.
+/// immediately -- the immediate path underneath [`trigger_sync_delayed`]
+/// (issue #84), which is what every current caller actually calls; this stays
+/// `pub` for #86's future exemptions and for direct use by this module's own
+/// tests. `origin_path` is the root-relative path of the note whose save
+/// triggered this call, if any (issue #64); a trigger with no save behind it
+/// (a create, a delete, a manual sync) passes `None`.
 pub fn trigger_sync(
     app: AppHandle,
     manager: Arc<SyncManager>,
@@ -149,6 +163,50 @@ pub fn trigger_sync(
     });
 }
 
+/// Arms (or rearms) `root`'s quiet-period timer and returns immediately
+/// (issue #84): every current caller of [`trigger_sync`] routes through here
+/// instead, so a burst of saves settles into a single trailing chain run
+/// rather than one per save. A later call for the same root before the delay
+/// elapses restarts the countdown -- trailing-only, no leading edge, no
+/// maximum-wait ceiling -- by bumping `delay_generation` so the earlier
+/// sleeping task finds itself stale when it wakes and exits without running
+/// anything. `origin_path` is queued into `next_origin_paths` up front, same
+/// as [`trigger_sync`] does today, so it's still attributed to whichever run
+/// eventually fires even though that run is now delayed.
+///
+/// `root.sync_debounce_secs` of `0` (only reachable by constructing a
+/// `RootConfig` directly, since saved config is validated to 1-300) is
+/// treated as "fire almost immediately" rather than hanging -- needed for
+/// `run_startup_catchup`'s own tests, which use `0` for fast, deterministic
+/// timing and predate this delay.
+pub fn trigger_sync_delayed(
+    app: AppHandle,
+    manager: Arc<SyncManager>,
+    root: RootConfig,
+    origin_path: Option<String>,
+) {
+    let slot = manager.slot_for(&root.id);
+
+    if let Some(path) = origin_path {
+        slot.next_origin_paths.lock().unwrap().push(path);
+    }
+
+    let generation = slot.delay_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let delay = Duration::from_secs(root.sync_debounce_secs as u64);
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(delay).await;
+
+        if slot.delay_generation.load(Ordering::SeqCst) != generation {
+            // A later call rearmed the countdown before this one elapsed --
+            // that call's own task owns firing the chain now.
+            return;
+        }
+
+        trigger_sync(app, manager, root, None);
+    });
+}
+
 /// Startup catchup (issue #25): reactive-only sync leaves an interrupted push
 /// with nothing to ever retry it, so every configured root gets the same
 /// `trigger_sync` chain kicked off as `setup` returns. Each root's git work
@@ -163,7 +221,7 @@ pub fn trigger_sync(
 /// Tauri setup hook.
 pub fn run_startup_catchup(app: &AppHandle, manager: &Arc<SyncManager>, roots: Vec<RootConfig>) {
     for root in roots {
-        trigger_sync(app.clone(), manager.clone(), root, None);
+        trigger_sync_delayed(app.clone(), manager.clone(), root, None);
     }
 }
 
@@ -1332,5 +1390,179 @@ mod tests {
             remote_log_oneline(remote_dir.path()).is_empty(),
             "auto_sync is disabled for this root -- startup catchup must not push"
         );
+    }
+
+    fn commit_count(repo_path: &Path) -> usize {
+        let log = run_git(repo_path, &["log", "--oneline"]).unwrap();
+        if !log.status.success() {
+            return 0;
+        }
+        String::from_utf8_lossy(&log.stdout)
+            .lines()
+            .filter(|line| !line.is_empty())
+            .count()
+    }
+
+    fn root_config(id: &str, path: &Path, sync_debounce_secs: u32) -> RootConfig {
+        RootConfig {
+            id: id.to_string(),
+            path: path.to_str().unwrap().to_string(),
+            auto_sync: false,
+            remote_url: String::new(),
+            sync_debounce_secs,
+        }
+    }
+
+    #[test]
+    fn trigger_sync_delayed_does_not_commit_until_the_delay_elapses() {
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        write_and_stage(dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = root_config("root-1", dir.path(), 1);
+
+        trigger_sync_delayed(app, manager, root, Some("note.md".to_string()));
+
+        assert_eq!(
+            commit_count(dir.path()),
+            0,
+            "the chain must not run before the configured delay elapses"
+        );
+
+        let committed = wait_until(Duration::from_secs(5), || commit_count(dir.path()) == 1);
+        assert!(
+            committed,
+            "expected the chain to run once the delay elapsed"
+        );
+    }
+
+    #[test]
+    fn trigger_sync_delayed_restarts_the_countdown_on_a_second_trigger() {
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        write_and_stage(dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = root_config("root-1", dir.path(), 2);
+
+        let start = std::time::Instant::now();
+        trigger_sync_delayed(app.clone(), manager.clone(), root.clone(), None);
+
+        // Rearm partway through the first countdown -- if this didn't restart
+        // it, the chain would run ~2s after `start`; since it does, it must
+        // not run until ~2s after this second call instead.
+        thread::sleep(Duration::from_millis(800));
+        trigger_sync_delayed(app, manager, root, None);
+
+        thread::sleep(Duration::from_millis(1600));
+        assert_eq!(
+            commit_count(dir.path()),
+            0,
+            "the second trigger must have restarted the countdown rather than \
+             letting the first trigger's original deadline fire"
+        );
+
+        let committed = wait_until(Duration::from_secs(5), || commit_count(dir.path()) == 1);
+        assert!(committed, "expected exactly one run, after the rearm");
+        assert!(
+            start.elapsed() >= Duration::from_millis(2400),
+            "the chain must not have run before the second trigger's own full delay"
+        );
+    }
+
+    #[test]
+    fn trigger_sync_delayed_defaults_to_the_roots_configured_debounce() {
+        let short_dir = TempDir::new().unwrap();
+        init_repo(short_dir.path());
+        write_and_stage(short_dir.path(), "note.md", "hello\n");
+
+        let long_dir = TempDir::new().unwrap();
+        init_repo(long_dir.path());
+        write_and_stage(long_dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+
+        trigger_sync_delayed(
+            app.clone(),
+            manager.clone(),
+            root_config("root-short", short_dir.path(), 1),
+            None,
+        );
+        trigger_sync_delayed(
+            app,
+            manager,
+            root_config("root-long", long_dir.path(), 3),
+            None,
+        );
+
+        let short_committed_early = wait_until(Duration::from_millis(1500), || {
+            commit_count(short_dir.path()) == 1
+        });
+        assert!(
+            short_committed_early,
+            "the 1s-delay root should have committed well before the 3s-delay root"
+        );
+        assert_eq!(
+            commit_count(long_dir.path()),
+            0,
+            "the 3s-delay root must still be waiting out its own configured delay"
+        );
+
+        let long_committed = wait_until(Duration::from_secs(5), || {
+            commit_count(long_dir.path()) == 1
+        });
+        assert!(
+            long_committed,
+            "expected the longer delay to eventually fire"
+        );
+    }
+
+    #[test]
+    fn trigger_sync_delayed_is_independent_per_root() {
+        let dir_a = TempDir::new().unwrap();
+        init_repo(dir_a.path());
+        write_and_stage(dir_a.path(), "note.md", "hello\n");
+
+        let dir_b = TempDir::new().unwrap();
+        init_repo(dir_b.path());
+        write_and_stage(dir_b.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+
+        // Arm root A with a long delay, then root B with a short one -- A's
+        // countdown must be untouched by B's trigger on a different root.
+        trigger_sync_delayed(
+            app.clone(),
+            manager.clone(),
+            root_config("root-a", dir_a.path(), 3),
+            None,
+        );
+        trigger_sync_delayed(
+            app,
+            manager.clone(),
+            root_config("root-b", dir_b.path(), 1),
+            None,
+        );
+
+        let b_committed_early = wait_until(Duration::from_millis(1500), || {
+            commit_count(dir_b.path()) == 1
+        });
+        assert!(
+            b_committed_early,
+            "root B's short delay should resolve on its own schedule"
+        );
+        assert_eq!(
+            commit_count(dir_a.path()),
+            0,
+            "root A's longer delay must not be affected by root B's trigger"
+        );
+
+        let a_committed = wait_until(Duration::from_secs(5), || commit_count(dir_a.path()) == 1);
+        assert!(a_committed, "expected root A to eventually commit too");
     }
 }
