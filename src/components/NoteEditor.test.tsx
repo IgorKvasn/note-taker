@@ -50,12 +50,15 @@ function mockInvoke(overrides: Record<string, unknown> = {}) {
  * Fires a `sync-status` event through every handler registered for it --
  * NoteEditor's own conflict re-fetch and `useNoteLinks`' re-scan both listen,
  * so picking a single call index would silently test the wrong subscriber.
+ * `origin_paths` defaults to empty (a sync with no save behind it) so
+ * existing callers not exercising issue #64's filtering don't need to name it.
  */
-async function emitSyncStatus(payload: SyncStatusEvent) {
+async function emitSyncStatus(payload: Omit<SyncStatusEvent, "origin_paths"> & { origin_paths?: string[] }) {
   await waitFor(() => expect(listen).toHaveBeenCalled());
+  const eventPayload: SyncStatusEvent = { origin_paths: [], ...payload };
   for (const [event, handler] of listen.mock.calls) {
     if (event === "sync-status") {
-      (handler as (event: { payload: SyncStatusEvent }) => void)({ payload });
+      (handler as (event: { payload: SyncStatusEvent }) => void)({ payload: eventPayload });
     }
   }
 }
@@ -483,6 +486,47 @@ describe("NoteEditor", () => {
       expect(invoke).not.toHaveBeenCalledWith("open_note", expect.anything());
     });
 
+    it("does not re-fetch when the settled sync's origin_paths names this note's own save (issue #64)", async () => {
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+      invoke.mockClear();
+
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" }, origin_paths: ["note.md"] });
+
+      expect(invoke).not.toHaveBeenCalledWith("open_note", expect.anything());
+    });
+
+    it("re-fetches when the settled sync's origin_paths names only another note's save", async () => {
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+      invoke.mockClear();
+
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" }, origin_paths: ["other.md"] });
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
+    });
+
+    it("re-fetches when origin_paths is empty, e.g. a manual sync or a conflict resolution completing", async () => {
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+      invoke.mockClear();
+
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" }, origin_paths: [] });
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
+    });
+
+    it("still picks up a new conflict from elsewhere even when its own save is also among the origin paths", async () => {
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+      expect(screen.queryByRole("button", { name: /mark resolved/i })).toBeNull();
+
+      mockInvoke({ open_note: { content: "<<<<<<< HEAD\n", id: "01LOADED", is_conflicted: true } });
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "conflict" }, origin_paths: ["other.md"] });
+
+      expect(await screen.findByRole("button", { name: /mark resolved/i })).toBeDefined();
+    });
+
     it("does not let a stale sync-status listener from a previous note overwrite the newly-opened note", async () => {
       invoke.mockImplementation((command: string, args?: unknown) => {
         if (command === "open_note") {
@@ -505,7 +549,7 @@ describe("NoteEditor", () => {
       // down on unmount; firing its handler directly (as if it raced the
       // cleanup) must not resurrect old.md's content into the new note.
       const staleHandler = listen.mock.calls[0][1] as (event: { payload: SyncStatusEvent }) => void;
-      staleHandler({ payload: { root_id: "01ROOT", state: { state: "synced" } } });
+      staleHandler({ payload: { root_id: "01ROOT", state: { state: "synced" }, origin_paths: [] } });
 
       await waitFor(() => expect(screen.queryByText("CONTENT OF old.md")).toBeNull());
       expect(screen.getByText("CONTENT OF new.md")).toBeDefined();

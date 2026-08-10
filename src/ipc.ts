@@ -156,6 +156,8 @@ export type SyncState =
 export interface SyncStatusEvent {
   root_id: string;
   state: SyncState;
+  /** Root-relative paths of notes whose save fed into this sync run (issue #64). */
+  origin_paths: string[];
 }
 
 /** Mirrors `RootStatus` in `src-tauri/src/sync.rs`, returned by `get_root_status`. */

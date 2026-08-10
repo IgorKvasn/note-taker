@@ -493,6 +493,14 @@ export function NoteEditor({
       if (event.payload.root_id !== rootId || event.payload.state.state === "syncing") {
         return;
       }
+      // The backend omits a path from origin_paths whenever a merge ran during
+      // that sync (issue #64), since a merge can rewrite any tracked file with
+      // remote-side content. So this note's path showing up here guarantees its
+      // own save is the only thing that touched its disk content this run --
+      // re-reading would be a no-op at best.
+      if (event.payload.origin_paths.includes(path)) {
+        return;
+      }
       // Skip while the user has an edit in flight -- disk content is stale
       // relative to what they're typing, and overwriting it would both
       // discard the keystrokes and re-save that stale content underneath them.

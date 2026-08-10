@@ -19,10 +19,10 @@ function mockStatus(status: RootStatus) {
 }
 
 /** Fires a `sync-status` event through whichever handler the indicator registered. */
-async function emitSyncStatus(payload: SyncStatusEvent) {
+async function emitSyncStatus(payload: Omit<SyncStatusEvent, "origin_paths">) {
   await waitFor(() => expect(listen).toHaveBeenCalled());
   const handler = listen.mock.calls[0][1] as (event: { payload: SyncStatusEvent }) => void;
-  handler({ payload });
+  handler({ payload: { origin_paths: [], ...payload } });
 }
 
 describe("RootSyncIndicator", () => {

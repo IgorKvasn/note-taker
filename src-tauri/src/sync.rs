@@ -32,6 +32,14 @@ pub enum SyncState {
 pub struct SyncStatusEvent {
     pub root_id: String,
     pub state: SyncState,
+    /// Root-relative paths of notes whose `save_note` call fed into this sync
+    /// run (issue #64). Empty for a sync with no save behind it at all --
+    /// `create_note`/`create_folder`/`delete_item`/`move_item`/`sync_root`,
+    /// startup catchup, and `mark_resolved`'s own direct emission. Lets a
+    /// client tell a sync it caused (its own path is in here) apart from one
+    /// it needs to react to, e.g. another note's save or a merge pulling in
+    /// remote changes -- both leave this note's path out of the set.
+    pub origin_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -63,6 +71,12 @@ struct RootSyncSlot {
     /// running sync right before it clears `busy`, so at most one extra run
     /// happens no matter how many triggers arrived in between.
     pending: Mutex<bool>,
+    /// Accumulates the save origin paths (see [`SyncStatusEvent::origin_paths`])
+    /// for whichever run hasn't started yet -- the queued initial run, or the
+    /// coalesced trailing run once one is already in flight. Drained into that
+    /// run's own snapshot right before it starts, so a trigger arriving mid-run
+    /// contributes to the *next* pass's origin set, never the one already executing.
+    next_origin_paths: Mutex<Vec<String>>,
 }
 
 impl SyncManager {
@@ -92,12 +106,22 @@ impl SyncManager {
 
 /// Kicks off the sync chain for `root` as a background task and returns
 /// immediately -- callers (`save_note`, `create_note`, `create_folder`,
-/// `sync_root`) must not await this.
-pub fn trigger_sync(app: AppHandle, manager: Arc<SyncManager>, root: RootConfig) {
+/// `sync_root`) must not await this. `origin_path` is the root-relative path
+/// of the note whose save triggered this call, if any (issue #64); a trigger
+/// with no save behind it (a create, a delete, a manual sync) passes `None`.
+pub fn trigger_sync(
+    app: AppHandle,
+    manager: Arc<SyncManager>,
+    root: RootConfig,
+    origin_path: Option<String>,
+) {
     let slot = manager.slot_for(&root.id);
 
     {
         let mut busy = slot.busy.lock().unwrap();
+        if let Some(path) = origin_path {
+            slot.next_origin_paths.lock().unwrap().push(path);
+        }
         if *busy {
             *slot.pending.lock().unwrap() = true;
             return;
@@ -108,7 +132,8 @@ pub fn trigger_sync(app: AppHandle, manager: Arc<SyncManager>, root: RootConfig)
     let manager_for_task = manager.clone();
     tauri::async_runtime::spawn(async move {
         loop {
-            run_sync_chain(&app, &manager_for_task, &root);
+            let origin_paths = std::mem::take(&mut *slot.next_origin_paths.lock().unwrap());
+            run_sync_chain(&app, &manager_for_task, &root, origin_paths);
 
             let mut busy = slot.busy.lock().unwrap();
             let mut pending = slot.pending.lock().unwrap();
@@ -124,10 +149,11 @@ pub fn trigger_sync(app: AppHandle, manager: Arc<SyncManager>, root: RootConfig)
     });
 }
 
-pub fn emit_status(app: &AppHandle, root_id: &str, state: SyncState) {
+pub fn emit_status(app: &AppHandle, root_id: &str, state: SyncState, origin_paths: Vec<String>) {
     let event = SyncStatusEvent {
         root_id: root_id.to_string(),
         state,
+        origin_paths,
     };
     if let Err(error) = app.emit(EVENT_SYNC_STATUS, &event) {
         eprintln!("failed to emit {EVENT_SYNC_STATUS}: {error}");
@@ -137,35 +163,48 @@ pub fn emit_status(app: &AppHandle, root_id: &str, state: SyncState) {
 /// `git add` -> `git commit` -> (if configured) `git push` -> on rejection,
 /// merge and re-push. Runs synchronously on whatever thread calls it; the
 /// caller is expected to be the background task spawned by [`trigger_sync`].
-fn run_sync_chain(app: &AppHandle, manager: &SyncManager, root: &RootConfig) {
-    emit_status(app, &root.id, SyncState::Syncing);
+fn run_sync_chain(
+    app: &AppHandle,
+    manager: &SyncManager,
+    root: &RootConfig,
+    origin_paths: Vec<String>,
+) {
+    emit_status(app, &root.id, SyncState::Syncing, origin_paths.clone());
 
     let repo_path = Path::new(&root.path);
-    let final_state = sync_once(repo_path, root.auto_sync, &root.remote_url);
+    let (final_state, merged) = sync_once(repo_path, root.auto_sync, &root.remote_url);
     manager.record_state(&root.id, final_state.clone());
-    emit_status(app, &root.id, final_state);
+    // A merge (run only after a rejected push) can rewrite any tracked file
+    // with remote-side content, including one of this run's own origin paths
+    // -- so a merge invalidates the guarantee that those paths' disk content
+    // came only from the save that reported them, and origin_paths must not
+    // claim otherwise (issue #64).
+    let reported_origin_paths = if merged { Vec::new() } else { origin_paths };
+    emit_status(app, &root.id, final_state, reported_origin_paths);
 }
 
 /// The chain's actual logic, separated from event emission so it can be unit
-/// tested against real throwaway git repos without a `tauri::AppHandle`.
-fn sync_once(repo_path: &Path, auto_sync: bool, remote_url: &str) -> SyncState {
+/// tested against real throwaway git repos without a `tauri::AppHandle`. The
+/// returned `bool` is `true` if a `git merge` ran (i.e. the initial push was
+/// rejected) -- see `run_sync_chain`'s use of it to gate `origin_paths`.
+fn sync_once(repo_path: &Path, auto_sync: bool, remote_url: &str) -> (SyncState, bool) {
     if let Err(stderr) = git_add_all(repo_path) {
-        return SyncState::Error { stderr };
+        return (SyncState::Error { stderr }, false);
     }
 
     match git_commit(repo_path) {
         Ok(_) => {}
         Err(CommitError::NothingToCommit) => {}
-        Err(CommitError::Failed(stderr)) => return SyncState::Error { stderr },
+        Err(CommitError::Failed(stderr)) => return (SyncState::Error { stderr }, false),
     }
 
     if !auto_sync || remote_url.is_empty() {
-        return SyncState::LocalOnly;
+        return (SyncState::LocalOnly, false);
     }
 
     match git_push(repo_path) {
-        Ok(()) => SyncState::Synced,
-        Err(stderr) => resolve_after_push_rejection(repo_path, &stderr),
+        Ok(()) => (SyncState::Synced, false),
+        Err(stderr) => (resolve_after_push_rejection(repo_path, &stderr), true),
     }
 }
 
@@ -401,6 +440,27 @@ mod tests {
         );
     }
 
+    /// `origin_paths` (issue #64) sits alongside `state` rather than inside
+    /// the tagged union, so it must serialize as a plain sibling field on
+    /// every terminal state, not get swallowed by the enum's own tagging.
+    #[test]
+    fn sync_status_event_serializes_origin_paths_alongside_state() {
+        let event = SyncStatusEvent {
+            root_id: "root-1".to_string(),
+            state: SyncState::Synced,
+            origin_paths: vec!["note.md".to_string(), "folder/other.md".to_string()],
+        };
+
+        let value = serde_json::to_value(&event).unwrap();
+
+        assert_eq!(value["root_id"], "root-1");
+        assert_eq!(value["state"]["state"], "synced");
+        assert_eq!(
+            value["origin_paths"],
+            serde_json::json!(["note.md", "folder/other.md"])
+        );
+    }
+
     /// A bare repo's HEAD follows `init.defaultBranch`, so on a host defaulting
     /// to `master` it would point at a ref these tests never push, leaving
     /// clones with nothing checked out and no upstream branch to merge.
@@ -436,9 +496,13 @@ mod tests {
         init_repo(dir.path());
         write_and_stage(dir.path(), "note.md", "hello\n");
 
-        let state = sync_once(dir.path(), true, "");
+        let (state, merged) = sync_once(dir.path(), true, "");
 
         assert_eq!(state, SyncState::LocalOnly);
+        assert!(
+            !merged,
+            "no remote configured -- there is nothing to merge from"
+        );
         let log = run_git(dir.path(), &["log", "--oneline"]).unwrap();
         assert!(log.status.success());
         assert!(!log.stdout.is_empty(), "expected a commit to exist");
@@ -450,9 +514,13 @@ mod tests {
         init_repo(dir.path());
         write_and_stage(dir.path(), "note.md", "hello\n");
 
-        let state = sync_once(dir.path(), false, "git@example.com:user/notes.git");
+        let (state, merged) = sync_once(dir.path(), false, "git@example.com:user/notes.git");
 
         assert_eq!(state, SyncState::LocalOnly);
+        assert!(
+            !merged,
+            "auto_sync is off -- push (and so merge) never runs"
+        );
     }
 
     #[test]
@@ -464,9 +532,10 @@ mod tests {
 
         // Second run: nothing changed since the first commit. `git commit`
         // failing with "nothing to commit" must not surface as SyncState::Error.
-        let state = sync_once(dir.path(), true, "");
+        let (state, merged) = sync_once(dir.path(), true, "");
 
         assert_eq!(state, SyncState::LocalOnly);
+        assert!(!merged);
     }
 
     #[test]
@@ -503,9 +572,13 @@ mod tests {
         );
 
         write_and_stage(dir.path(), "note2.md", "more\n");
-        let state = sync_once(dir.path(), true, remote_dir.path().to_str().unwrap());
+        let (state, merged) = sync_once(dir.path(), true, remote_dir.path().to_str().unwrap());
 
         assert_eq!(state, SyncState::Synced);
+        assert!(
+            !merged,
+            "push succeeded on the first try -- no merge needed"
+        );
     }
 
     #[test]
@@ -559,9 +632,13 @@ mod tests {
         // should be rejected (remote has diverged), triggering an automatic
         // merge that resolves cleanly since the two commits touch different files.
         write_and_stage(clone_b.path(), "b-only.md", "from b\n");
-        let state = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
+        let (state, merged) = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
 
         assert_eq!(state, SyncState::Synced);
+        assert!(
+            merged,
+            "the first push was rejected, so a merge must have run"
+        );
         assert!(
             clone_b.path().join("a-only.md").exists(),
             "merge should have pulled in a's file"
@@ -617,9 +694,13 @@ mod tests {
         // rejected, the automatic merge collides on shared.md, and the chain
         // must report `conflict` rather than force a resolution.
         write_and_stage(clone_b.path(), "shared.md", "base, edited by b\n");
-        let state = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
+        let (state, merged) = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
 
         assert_eq!(state, SyncState::Conflict);
+        assert!(
+            merged,
+            "the first push was rejected, so a merge must have run"
+        );
         assert!(is_merge_in_progress(clone_b.path()));
     }
 
@@ -667,7 +748,7 @@ mod tests {
         assert!(run_git(clone_a.path(), &["push"]).unwrap().status.success());
 
         write_and_stage(dir, "shared.md", "base, edited by b\n");
-        let state = sync_once(dir, true, remote_dir.path().to_str().unwrap());
+        let (state, _merged) = sync_once(dir, true, remote_dir.path().to_str().unwrap());
         assert_eq!(state, SyncState::Conflict);
     }
 
@@ -804,7 +885,7 @@ mod tests {
         // on both files, giving a genuine two-file conflicted merge.
         write_and_stage(clone_b.path(), "first.md", "base, edited by b\n");
         write_and_stage(clone_b.path(), "second.md", "base, edited by b\n");
-        let state = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
+        let (state, _merged) = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
         assert_eq!(state, SyncState::Conflict);
         assert_eq!(conflicted_relative_paths(clone_b.path()).len(), 2);
 
@@ -869,7 +950,7 @@ mod tests {
         assert!(run_git(clone_a.path(), &["push"]).unwrap().status.success());
 
         write_and_stage(clone_b.path(), "shared.md", "base, edited by b\n");
-        let state = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
+        let (state, _merged) = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
         assert_eq!(state, SyncState::Conflict);
 
         let absolute_path = clone_b.path().join("shared.md");
@@ -922,6 +1003,38 @@ mod tests {
         assert!(
             *busy,
             "busy should still be true until the coalesced pass also completes"
+        );
+    }
+
+    /// Mirrors `sync_manager_coalesces_a_trigger_that_arrives_while_busy`, but
+    /// for the origin-path bookkeeping added by issue #64: two triggers
+    /// (a save and a plain trigger with no save behind it) that land on the
+    /// same queued/coalesced run must both land in the run's origin set, and
+    /// draining it for that run must leave the slot empty for the next one.
+    #[test]
+    fn sync_manager_accumulates_origin_paths_for_the_next_run_and_drains_them_once() {
+        let manager = SyncManager::new();
+        let slot = manager.slot_for("root-1");
+
+        // Simulates what trigger_sync does on each call: push the origin path
+        // (if any) before checking busy.
+        slot.next_origin_paths
+            .lock()
+            .unwrap()
+            .push("note.md".to_string());
+        slot.next_origin_paths
+            .lock()
+            .unwrap()
+            .push("other.md".to_string());
+
+        // Simulates run_sync_chain's setup: snapshot-and-clear right before a
+        // pass starts running.
+        let drained = std::mem::take(&mut *slot.next_origin_paths.lock().unwrap());
+
+        assert_eq!(drained, vec!["note.md".to_string(), "other.md".to_string()]);
+        assert!(
+            slot.next_origin_paths.lock().unwrap().is_empty(),
+            "draining for the run that's about to start must not leave stale paths for the next one"
         );
     }
 

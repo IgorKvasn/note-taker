@@ -86,7 +86,7 @@ fn open_note(root_id: String, path: String) -> Result<OpenNoteResult, String> {
 fn save_note(app: AppHandle, root_id: String, path: String, content: String) -> Result<(), String> {
     let note_path = config::resolve_path_in_root(&root_id, &path)?;
     notes::save_note(&note_path, &content)?;
-    trigger_sync_for_root(&app, &root_id);
+    trigger_sync_for_root(&app, &root_id, Some(path));
     Ok(())
 }
 
@@ -94,7 +94,7 @@ fn save_note(app: AppHandle, root_id: String, path: String, content: String) -> 
 fn create_note(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
     let note_path = config::resolve_path_in_root(&root_id, &path)?;
     notes::create_note(&note_path)?;
-    trigger_sync_for_root(&app, &root_id);
+    trigger_sync_for_root(&app, &root_id, None);
     Ok(())
 }
 
@@ -102,7 +102,7 @@ fn create_note(app: AppHandle, root_id: String, path: String) -> Result<(), Stri
 fn create_folder(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
     let folder_path = config::resolve_path_in_root(&root_id, &path)?;
     notes::create_folder(&folder_path)?;
-    trigger_sync_for_root(&app, &root_id);
+    trigger_sync_for_root(&app, &root_id, None);
     Ok(())
 }
 
@@ -114,7 +114,7 @@ fn create_folder(app: AppHandle, root_id: String, path: String) -> Result<(), St
 fn delete_item(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
     let item_path = config::resolve_path_in_root(&root_id, &path)?;
     notes::delete_item(&item_path)?;
-    trigger_sync_for_root(&app, &root_id);
+    trigger_sync_for_root(&app, &root_id, None);
     Ok(())
 }
 
@@ -129,13 +129,13 @@ fn move_item(
     let from = config::resolve_path_in_root(&root_id, &from_path)?;
     let to = config::resolve_path_in_root(&root_id, &to_path)?;
     notes::move_item(&root_path, &from, &to)?;
-    trigger_sync_for_root(&app, &root_id);
+    trigger_sync_for_root(&app, &root_id, None);
     Ok(())
 }
 
 #[tauri::command]
 fn sync_root(app: AppHandle, root_id: String) -> Result<(), String> {
-    trigger_sync_for_root(&app, &root_id);
+    trigger_sync_for_root(&app, &root_id, None);
     Ok(())
 }
 
@@ -169,20 +169,24 @@ fn mark_resolved(app: AppHandle, root_id: String, path: String) -> Result<(), St
 
     let manager = app.state::<Arc<SyncManager>>();
     manager.record_state(&root_id, outcome.sync_state.clone());
-    sync::emit_status(&app, &root_id, outcome.sync_state);
+    // No save fed into this outcome -- it's the merge-commit-and-push that
+    // finishing the last conflicted file runs inline, so `origin_paths` stays
+    // empty and any editor open on a note this changed will still refresh.
+    sync::emit_status(&app, &root_id, outcome.sync_state, Vec::new());
     Ok(())
 }
 
 /// The one call every save/create command makes to kick the sync chain off as
 /// a background task (spec §7). A root that fails to resolve (e.g. a stale ID
 /// from a since-removed root) just skips sync silently -- the mutation itself
-/// already succeeded, and there is nothing sensible to sync.
-fn trigger_sync_for_root(app: &AppHandle, root_id: &str) {
+/// already succeeded, and there is nothing sensible to sync. `origin_path` is
+/// forwarded to [`sync::trigger_sync`] (issue #64) -- `Some` only for `save_note`.
+fn trigger_sync_for_root(app: &AppHandle, root_id: &str, origin_path: Option<String>) {
     let Ok(root) = config::find_root_config(root_id) else {
         return;
     };
     let manager = app.state::<Arc<SyncManager>>().inner().clone();
-    sync::trigger_sync(app.clone(), manager, root);
+    sync::trigger_sync(app.clone(), manager, root, origin_path);
 }
 
 /// Startup catchup (issue #25): reactive-only sync leaves an interrupted push
@@ -196,7 +200,7 @@ fn trigger_sync_for_root(app: &AppHandle, root_id: &str) {
 fn run_startup_catchup(app: &AppHandle) {
     let manager = app.state::<Arc<SyncManager>>().inner().clone();
     for root in config::all_root_configs() {
-        sync::trigger_sync(app.clone(), manager.clone(), root);
+        sync::trigger_sync(app.clone(), manager.clone(), root, None);
     }
 }
 
