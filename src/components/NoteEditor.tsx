@@ -55,6 +55,24 @@ function moveCursorTo(view: EditorView, offset: number | undefined) {
   view.focus();
 }
 
+/** Replaces the document with freshly-read disk content, but only if it
+ * actually differs from what's already in the buffer -- CodeMirror's `Text`
+ * model always joins lines with `\n` (there's no lineSeparator facet
+ * configured here), so a note with CRLF line endings on disk would compare
+ * unequal to itself on every no-op refresh without normalizing first. An
+ * identical whole-document replacement still diffs down to an empty change,
+ * but CodeMirror resets the selection to 0 regardless, moving the caret even
+ * though nothing actually changed. */
+function replaceContentIfChanged(view: EditorView, content: string) {
+  if (view.state.doc.toString().replace(/\r\n/g, "\n") === content.replace(/\r\n/g, "\n")) {
+    return;
+  }
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: content },
+    annotations: remoteContentLoad.of(true),
+  });
+}
+
 interface NoteEditorProps {
   rootId: string;
   path: string;
@@ -218,10 +236,7 @@ export function NoteEditor({
         if (isCancelled || loadGeneration !== loadGenerationRef.current) {
           return;
         }
-        view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: result.content },
-          annotations: remoteContentLoad.of(true),
-        });
+        replaceContentIfChanged(view, result.content);
         setContent(result.content);
         setIsConflicted(result.is_conflicted);
         setNoteId(result.id);
@@ -287,11 +302,7 @@ export function NoteEditor({
           ) {
             return;
           }
-          const view = viewRef.current;
-          view.dispatch({
-            changes: { from: 0, to: view.state.doc.length, insert: result.content },
-            annotations: remoteContentLoad.of(true),
-          });
+          replaceContentIfChanged(viewRef.current, result.content);
           setContent(result.content);
           setIsConflicted(result.is_conflicted);
         })

@@ -539,6 +539,36 @@ describe("NoteEditor", () => {
       );
     });
 
+    it("does not move the caret when a terminal sync-status event returns content identical to the buffer (issue #62)", async () => {
+      const user = userEvent.setup();
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      await screen.findByText("Loaded");
+
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard("{Home}X");
+      await screen.findByText("XLoaded");
+
+      // Let the autosave debounce flush -- the sync-status handler ignores
+      // the event entirely while a save is still pending, and the reported
+      // bug only reproduces once the disk content the sync reads back
+      // matches what's already in the buffer.
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("save_note", { rootId: "01ROOT", path: "note.md", content: "XLoaded\n" }),
+      );
+
+      // Caret sits right after the "X" the user just typed, at offset 1.
+      mockInvoke({ open_note: { content: "XLoaded\n", id: "01LOADED", is_conflicted: false } });
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
+
+      const selection = window.getSelection();
+      expect(editable.textContent).toBe("XLoaded");
+      expect(selection?.anchorOffset).toBe(1);
+    });
+
     it("flushes a pending autosave before calling mark_resolved so the just-cleaned content is what gets read", async () => {
       const user = userEvent.setup();
       mockInvoke({ open_note: { content: "<<<<<<< HEAD\nstuff\n=======\n", id: "01LOADED", is_conflicted: true } });
