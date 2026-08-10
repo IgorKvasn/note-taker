@@ -231,27 +231,12 @@ fn trigger_sync_for_root(app: &AppHandle, root_id: &str, origin_path: Option<Str
     sync::trigger_sync(app.clone(), manager, root, origin_path);
 }
 
-/// Startup catchup (issue #25): reactive-only sync leaves an interrupted push
-/// with nothing to ever retry it, so every configured root gets the same
-/// `trigger_sync` chain kicked off as `setup` returns. Each root's git work
-/// runs on `trigger_sync`'s background task, so this call itself never blocks
-/// the window from appearing or the last-open note from restoring, and one
-/// root's failure can't stop another's from running -- they're entirely
-/// independent background tasks. `git push` is idempotent, so calling this
-/// again on a later launch (or if it somehow ran twice) is harmless.
-fn run_startup_catchup(app: &AppHandle) {
-    let manager = app.state::<Arc<SyncManager>>().inner().clone();
-    for root in config::all_root_configs() {
-        sync::trigger_sync(app.clone(), manager.clone(), root, None);
-    }
-}
-
 /// Background attachment cleanup for every configured root, run once at
 /// startup (spec §11.5's "app start" trigger) -- no note is open yet this
 /// early, so there is no live-buffer extra reference source to pass. Spawned
 /// as a background task so a large `.attachments/` listing never blocks the
 /// window from appearing; each root's cleanup failing silently (a missing
-/// root, an unreadable directory) matches `run_startup_catchup`'s own
+/// root, an unreadable directory) matches `sync::run_startup_catchup`'s own
 /// per-root independence.
 fn run_startup_attachment_cleanup(app: &AppHandle) {
     let app = app.clone();
@@ -443,7 +428,7 @@ fn preview_attachment_cleanup_all_roots(
 /// mirroring [`execute_attachment_cleanup`]'s re-scan-rather-than-trust-the-
 /// preview approach but across every configured root (issue #89). Each root's
 /// sync is triggered independently, matching how every other multi-root
-/// action (e.g. [`run_startup_catchup`]) treats roots as independent.
+/// action (e.g. [`sync::run_startup_catchup`]) treats roots as independent.
 #[tauri::command]
 fn execute_attachment_cleanup_all_roots(
     app: AppHandle,
@@ -570,7 +555,8 @@ pub fn run() {
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| handle_menu_event(app, event.id().0.as_str()));
 
-            run_startup_catchup(app.handle());
+            let manager = app.state::<Arc<SyncManager>>().inner().clone();
+            sync::run_startup_catchup(app.handle(), &manager, config::all_root_configs());
             run_startup_attachment_cleanup(app.handle());
 
             Ok(())

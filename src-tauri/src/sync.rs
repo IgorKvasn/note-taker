@@ -149,6 +149,24 @@ pub fn trigger_sync(
     });
 }
 
+/// Startup catchup (issue #25): reactive-only sync leaves an interrupted push
+/// with nothing to ever retry it, so every configured root gets the same
+/// `trigger_sync` chain kicked off as `setup` returns. Each root's git work
+/// runs on `trigger_sync`'s background task, so this call itself never blocks
+/// the window from appearing or the last-open note from restoring, and one
+/// root's failure can't stop another's from running -- they're entirely
+/// independent background tasks. `git push` is idempotent, so calling this
+/// again on a later launch (or if it somehow ran twice) is harmless.
+///
+/// Takes `roots` explicitly (issue #81) rather than reading global config, so
+/// a test can drive it against seeded repositories without going through the
+/// Tauri setup hook.
+pub fn run_startup_catchup(app: &AppHandle, manager: &Arc<SyncManager>, roots: Vec<RootConfig>) {
+    for root in roots {
+        trigger_sync(app.clone(), manager.clone(), root, None);
+    }
+}
+
 pub fn emit_status(app: &AppHandle, root_id: &str, state: SyncState, origin_paths: Vec<String>) {
     let event = SyncStatusEvent {
         root_id: root_id.to_string(),
