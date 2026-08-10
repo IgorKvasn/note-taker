@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorView } from "@codemirror/view";
@@ -1020,6 +1020,112 @@ describe("NoteEditor", () => {
 
       resolvePick(null);
       await waitFor(() => expect(screen.getByTitle("Image").hasAttribute("disabled")).toBe(false));
+    });
+  });
+
+  describe("clipboard paste attaches an image (issue #77)", () => {
+    /** jsdom implements neither `ClipboardEvent` nor `DataTransfer` fully
+     * enough for `.files`/`.getData`, so this fakes just the surface the
+     * paste handler reads, matching `attachmentPaste.test.ts`'s fake. */
+    function pasteClipboardData(options: { files?: File[]; uriList?: string } = {}) {
+      const files = options.files ?? [];
+      return {
+        files: {
+          length: files.length,
+          item: (index: number) => files[index] ?? null,
+          [Symbol.iterator]: function* () {
+            yield* files;
+          },
+        } as unknown as FileList,
+        getData: (format: string) => (format === "text/uri-list" ? options.uriList ?? "" : ""),
+      };
+    }
+
+    function pngFile(name: string): File {
+      return new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, { type: "image/png" });
+    }
+
+    it("writes pasted image bytes and inserts an attachment: reference at the cursor", async () => {
+      const user = userEvent.setup();
+      mockInvoke({ write_attachment: "attachment:01ABC" });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard("{End}");
+
+      fireEvent.paste(editable, { clipboardData: pasteClipboardData({ files: [pngFile("photo.png")] }) });
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("write_attachment", {
+          rootId: "01ROOT",
+          bytes: [0x89, 0x50, 0x4e, 0x47],
+          originalName: "photo.png",
+        }),
+      );
+      await waitFor(() => expect(editable.textContent).toBe("Loaded![photo.png](attachment:01ABC)"));
+    });
+
+    it("imports a pasted file:// path and inserts the resulting reference", async () => {
+      const user = userEvent.setup();
+      mockInvoke({ import_attachment: "attachment:01DEF" });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard("{End}");
+
+      fireEvent.paste(editable, {
+        clipboardData: pasteClipboardData({ uriList: "file:///home/user/shot.png" }),
+      });
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("import_attachment", {
+          rootId: "01ROOT",
+          absolutePath: "/home/user/shot.png",
+        }),
+      );
+      await waitFor(() => expect(editable.textContent).toBe("Loaded![shot.png](attachment:01DEF)"));
+    });
+
+    it("leaves plain text paste unclaimed, falling through to normal editor paste", async () => {
+      const user = userEvent.setup();
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard("{End}");
+
+      fireEvent.paste(editable, { clipboardData: pasteClipboardData({ uriList: "just some plain text" }) });
+
+      expect(invoke).not.toHaveBeenCalledWith("write_attachment", expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith("import_attachment", expect.anything());
+    });
+
+    it("surfaces a failed import inline rather than inserting anything", async () => {
+      const user = userEvent.setup();
+      invoke.mockImplementation((command: string) => {
+        if (command === "open_note") {
+          return Promise.resolve({ content: "Loaded\n", id: "01LOADED", is_conflicted: false });
+        }
+        if (command === "write_attachment") {
+          return Promise.reject(new Error("not a recognized image format"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard("{End}");
+
+      fireEvent.paste(editable, { clipboardData: pasteClipboardData({ files: [pngFile("photo.png")] }) });
+
+      expect(await screen.findByRole("alert")).toHaveProperty(
+        "textContent",
+        expect.stringContaining("not a recognized image format"),
+      );
+      expect(editable.textContent).toBe("Loaded");
     });
   });
 

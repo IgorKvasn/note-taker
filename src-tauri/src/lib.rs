@@ -280,6 +280,25 @@ fn write_attachment(
     Ok(reference)
 }
 
+/// Reads a file server-side from an absolute path and otherwise behaves
+/// exactly like [`write_attachment`] (spec §11.3): same magic-byte
+/// validation, same ULID generation, same `.attachments/` write, same sync
+/// trigger. A deliberate, narrow exception to the general rule that absolute
+/// paths never cross the IPC boundary -- justified because it's plumbing
+/// shared between the clipboard's `file:///`-path paste case (issue #77) and
+/// drag-and-drop (issue #78), not a widening of general filesystem access.
+#[tauri::command]
+fn import_attachment(
+    app: AppHandle,
+    root_id: String,
+    absolute_path: String,
+) -> Result<String, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let reference = attachments::import_attachment(&root_path, Path::new(&absolute_path))?;
+    trigger_sync_for_root(&app, &root_id, None);
+    Ok(reference)
+}
+
 /// Returns an attachment's raw bytes as a binary IPC response rather than a
 /// serialized byte array -- `tauri::ipc::Response` delivers an `ArrayBuffer`
 /// to JS via `InvokeResponseBody::Raw`, avoiding the ~4.4x inflation a JSON
@@ -365,6 +384,7 @@ pub fn run() {
             search_notes,
             scan_links,
             write_attachment,
+            import_attachment,
             read_attachment,
             get_state,
             save_state,

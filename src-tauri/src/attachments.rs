@@ -118,6 +118,21 @@ pub fn write_attachment(
     Ok(format!("{ATTACHMENT_SCHEME}{id}"))
 }
 
+/// Reads `absolute_path` server-side and otherwise behaves exactly like
+/// [`write_attachment`] (spec §11.3): same magic-byte validation, same ULID
+/// generation, same `.attachments/` write. `original_name` is `None` so the
+/// written filename is derived from `absolute_path`'s own file name -- this
+/// is the one narrow, spec-sanctioned exception to absolute paths never
+/// crossing the IPC boundary, shared plumbing for the file-manager-path paste
+/// case (#77) and drag-and-drop (#78).
+pub fn import_attachment(root_path: &Path, absolute_path: &Path) -> Result<String, String> {
+    let bytes = fs::read(absolute_path).map_err(|error| error.to_string())?;
+    let original_name = absolute_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
+    write_attachment(root_path, &bytes, original_name.as_deref())
+}
+
 /// Resolves `id` to its file in `.attachments/` via a prefix-match directory
 /// listing (the filename is `<ULID>-<name>.<ext>`, so the ULID is always a
 /// prefix) and returns its raw bytes.
@@ -303,5 +318,66 @@ mod tests {
         let result = read_attachment(dir.path(), "01ANYTHING");
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn import_attachment_reads_a_real_file_and_writes_it_into_attachments_with_its_name() {
+        let root = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        let source_path = source.path().join("vacation.png");
+        fs::write(&source_path, PNG_BYTES).unwrap();
+
+        let reference = import_attachment(root.path(), &source_path).unwrap();
+
+        assert!(reference.starts_with(ATTACHMENT_SCHEME));
+        let id = reference.strip_prefix(ATTACHMENT_SCHEME).unwrap();
+        let path = find_attachment_path(root.path(), id).unwrap();
+        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(file_name.starts_with(&format!("{id}-vacation")));
+        assert!(file_name.ends_with(".png"));
+        assert_eq!(fs::read(&path).unwrap(), PNG_BYTES);
+    }
+
+    #[test]
+    fn import_attachment_rejects_non_image_content_even_with_an_image_like_extension_and_path() {
+        let root = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        let source_path = source.path().join("fake.png");
+        fs::write(&source_path, b"not actually an image").unwrap();
+
+        let result = import_attachment(root.path(), &source_path);
+
+        assert!(result.is_err());
+        assert!(
+            !root.path().join(ATTACHMENTS_DIR).exists(),
+            "a rejected import must create nothing"
+        );
+    }
+
+    #[test]
+    fn import_attachment_errors_when_the_source_path_does_not_exist() {
+        let root = TempDir::new().unwrap();
+
+        let result = import_attachment(root.path(), Path::new("/nonexistent/does-not-exist.png"));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn import_attachment_twice_in_succession_produces_collision_free_filenames() {
+        let root = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        let source_path = source.path().join("photo.png");
+        fs::write(&source_path, PNG_BYTES).unwrap();
+
+        let first = import_attachment(root.path(), &source_path).unwrap();
+        let second = import_attachment(root.path(), &source_path).unwrap();
+
+        assert_ne!(first, second);
+        let entries: Vec<_> = fs::read_dir(root.path().join(ATTACHMENTS_DIR))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries.len(), 2);
     }
 }

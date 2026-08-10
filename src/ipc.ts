@@ -28,6 +28,7 @@ export const COMMAND_MARK_RESOLVED = "mark_resolved";
 export const COMMAND_CHECK_FOR_UPDATE = "check_for_update";
 export const COMMAND_PICK_IMAGE_FILE = "pick_image_file";
 export const COMMAND_WRITE_ATTACHMENT = "write_attachment";
+export const COMMAND_IMPORT_ATTACHMENT = "import_attachment";
 export const COMMAND_READ_ATTACHMENT = "read_attachment";
 
 /** Emitted by the backend git sync chain (spec §7); one-way, never invoked. */

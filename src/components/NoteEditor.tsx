@@ -18,6 +18,7 @@ import {
   type SyncStatusEvent,
 } from "../ipc";
 import { attachmentTarget, formatAttachment } from "./attachments";
+import { handleAttachmentPaste } from "./attachmentPaste";
 import { markdownLivePreview } from "./markdownLivePreview";
 import { noteEditorKeymap } from "./noteEditorKeymap";
 import { NoteToolbar } from "./NoteToolbar";
@@ -434,6 +435,17 @@ export function NoteEditor({
           keymap.of([...noteEditorKeymap, ...defaultKeymap, ...historyKeymap]),
           markdown({ base: markdownLanguage }),
           markdownLivePreview,
+          EditorView.domEventHandlers({
+            paste: (event, editorView) => {
+              // Claimed pastes (image bytes or a file:// path) call
+              // preventDefault synchronously inside handleAttachmentPaste
+              // before any async work starts (issue #77); an unclaimed paste
+              // falls through to CodeMirror's own handling untouched.
+              return handleAttachmentPaste(event, editorView, rootId, {
+                onImportError: (error) => setAttachmentError(error),
+              });
+            },
+          }),
           EditorView.updateListener.of((update) => {
             if (!update.docChanged || update.transactions.some((tr) => tr.annotation(remoteContentLoad))) {
               return;
