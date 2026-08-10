@@ -6,6 +6,10 @@ use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
+fn default_sync_debounce_secs() -> u32 {
+    5
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RootConfig {
     pub id: String,
@@ -13,6 +17,8 @@ pub struct RootConfig {
     pub auto_sync: bool,
     #[serde(default)]
     pub remote_url: String,
+    #[serde(default = "default_sync_debounce_secs")]
+    pub sync_debounce_secs: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,6 +37,8 @@ pub struct RootDraft {
     pub auto_sync: bool,
     #[serde(default)]
     pub remote_url: String,
+    #[serde(default = "default_sync_debounce_secs")]
+    pub sync_debounce_secs: u32,
     /// Set once the user has confirmed creating a missing directory. `save_config`
     /// refuses to `mkdir` without it, so a Save can never silently create a folder
     /// the user didn't ask for.
@@ -272,6 +280,14 @@ fn validate_drafts(drafts: &[RootDraft]) -> Vec<RootDraftError> {
                 path: draft.path.clone(),
                 message: "path exists but is not writable".to_string(),
             });
+            continue;
+        }
+
+        if !(1..=300).contains(&draft.sync_debounce_secs) {
+            errors.push(RootDraftError {
+                path: draft.path.clone(),
+                message: "sync delay must be between 1 and 300 seconds".to_string(),
+            });
         }
     }
 
@@ -348,6 +364,7 @@ pub fn save_config(drafts: Vec<RootDraft>) -> Result<Config, String> {
             path: draft.path,
             auto_sync: draft.auto_sync,
             remote_url: draft.remote_url,
+            sync_debounce_secs: draft.sync_debounce_secs,
         });
     }
 
@@ -431,6 +448,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn get_config_defaults_sync_debounce_secs_when_key_is_absent() {
+        with_xdg_config_home(|_| {
+            let path = config_path().unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(
+                &path,
+                r#"
+                version = 1
+
+                [[roots]]
+                id = "01AAA"
+                path = "/home/user/notes"
+                auto_sync = true
+                "#,
+            )
+            .unwrap();
+
+            match get_config() {
+                ConfigOutcome::Ok { config } => {
+                    assert_eq!(config.roots[0].sync_debounce_secs, 5);
+                }
+                other => panic!("expected Ok, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
     fn config_round_trips_through_write_and_read_preserving_order() {
         with_xdg_config_home(|_| {
             let config = Config {
@@ -441,12 +485,14 @@ pub(crate) mod tests {
                         path: "/home/user/notes".to_string(),
                         auto_sync: true,
                         remote_url: "git@example.com:user/notes.git".to_string(),
+                        sync_debounce_secs: 5,
                     },
                     RootConfig {
                         id: "01BBB".to_string(),
                         path: "/home/user/work-notes".to_string(),
                         auto_sync: false,
                         remote_url: String::new(),
+                        sync_debounce_secs: 5,
                     },
                 ],
             };
@@ -520,6 +566,7 @@ pub(crate) mod tests {
                     path: valid_dir.path().to_str().unwrap().to_string(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                     create_if_missing: false,
                 },
                 RootDraft {
@@ -527,6 +574,7 @@ pub(crate) mod tests {
                     path: "/this/path/does/not/exist/hopefully".to_string(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                     create_if_missing: false,
                 },
             ];
@@ -557,6 +605,7 @@ pub(crate) mod tests {
                 path: root_dir.path().to_str().unwrap().to_string(),
                 auto_sync: false,
                 remote_url: String::new(),
+                sync_debounce_secs: 5,
                 create_if_missing: false,
             }];
 
@@ -576,6 +625,7 @@ pub(crate) mod tests {
                     path: "/home/user/notes".to_string(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                 }],
             };
             write_config(&config).unwrap();
@@ -609,6 +659,7 @@ pub(crate) mod tests {
                     path: root_dir.path().to_str().unwrap().to_string(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                 }],
             };
             write_config(&config).unwrap();
@@ -636,6 +687,7 @@ pub(crate) mod tests {
                     path: root_dir.path().to_str().unwrap().to_string(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                 }],
             };
             write_config(&config).unwrap();
@@ -655,6 +707,7 @@ pub(crate) mod tests {
                     path: root_dir.path().to_str().unwrap().to_string(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                 }],
             };
             write_config(&config).unwrap();
@@ -676,6 +729,7 @@ pub(crate) mod tests {
                     path: root_dir.path().to_str().unwrap().to_string(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                 }],
             };
             write_config(&config).unwrap();
@@ -695,6 +749,7 @@ pub(crate) mod tests {
                     path: root_dir.path().to_str().unwrap().to_string(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                 }],
             };
             write_config(&config).unwrap();
@@ -714,6 +769,7 @@ pub(crate) mod tests {
                 path: missing_dir.to_str().unwrap().to_string(),
                 auto_sync: true,
                 remote_url: String::new(),
+                sync_debounce_secs: 5,
                 create_if_missing: true,
             }];
 
@@ -728,6 +784,112 @@ pub(crate) mod tests {
                 ConfigOutcome::Ok { config: read_back } => assert_eq!(read_back, config),
                 other => panic!("expected Ok, got {other:?}"),
             }
+        });
+    }
+
+    #[test]
+    fn save_config_round_trips_a_custom_sync_debounce_secs() {
+        with_xdg_config_home(|_| {
+            let root_dir = TempDir::new().unwrap();
+
+            let drafts = vec![RootDraft {
+                id: None,
+                path: root_dir.path().to_str().unwrap().to_string(),
+                auto_sync: false,
+                remote_url: String::new(),
+                sync_debounce_secs: 42,
+                create_if_missing: false,
+            }];
+
+            let config = save_config(drafts).expect("save should succeed");
+            assert_eq!(config.roots[0].sync_debounce_secs, 42);
+
+            match get_config() {
+                ConfigOutcome::Ok { config: read_back } => {
+                    assert_eq!(read_back.roots[0].sync_debounce_secs, 42);
+                }
+                other => panic!("expected Ok, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn save_config_rejects_sync_debounce_secs_below_the_minimum() {
+        with_xdg_config_home(|_| {
+            let root_dir = TempDir::new().unwrap();
+
+            let drafts = vec![RootDraft {
+                id: None,
+                path: root_dir.path().to_str().unwrap().to_string(),
+                auto_sync: false,
+                remote_url: String::new(),
+                sync_debounce_secs: 0,
+                create_if_missing: false,
+            }];
+
+            let result = save_config(drafts);
+
+            assert!(result.is_err());
+            assert!(
+                matches!(get_config(), ConfigOutcome::Missing),
+                "no config.toml should be written on a rejected save"
+            );
+        });
+    }
+
+    #[test]
+    fn save_config_rejects_sync_debounce_secs_above_the_maximum() {
+        with_xdg_config_home(|_| {
+            let root_dir = TempDir::new().unwrap();
+
+            let drafts = vec![RootDraft {
+                id: None,
+                path: root_dir.path().to_str().unwrap().to_string(),
+                auto_sync: false,
+                remote_url: String::new(),
+                sync_debounce_secs: 301,
+                create_if_missing: false,
+            }];
+
+            let result = save_config(drafts);
+
+            assert!(result.is_err());
+            assert!(
+                matches!(get_config(), ConfigOutcome::Missing),
+                "no config.toml should be written on a rejected save"
+            );
+        });
+    }
+
+    #[test]
+    fn save_config_accepts_sync_debounce_secs_at_the_boundaries() {
+        with_xdg_config_home(|_| {
+            let root_dir_min = TempDir::new().unwrap();
+            let root_dir_max = TempDir::new().unwrap();
+
+            let drafts = vec![
+                RootDraft {
+                    id: None,
+                    path: root_dir_min.path().to_str().unwrap().to_string(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                    sync_debounce_secs: 1,
+                    create_if_missing: false,
+                },
+                RootDraft {
+                    id: None,
+                    path: root_dir_max.path().to_str().unwrap().to_string(),
+                    auto_sync: false,
+                    remote_url: String::new(),
+                    sync_debounce_secs: 300,
+                    create_if_missing: false,
+                },
+            ];
+
+            let config = save_config(drafts).expect("save should succeed");
+
+            assert_eq!(config.roots[0].sync_debounce_secs, 1);
+            assert_eq!(config.roots[1].sync_debounce_secs, 300);
         });
     }
 }

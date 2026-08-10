@@ -505,6 +505,7 @@ mod tests {
             path: path.to_string_lossy().into_owned(),
             auto_sync: false,
             remote_url: String::new(),
+            sync_debounce_secs: 5,
         }
     }
 

@@ -684,12 +684,14 @@ mod tests {
                     path: root_a.path().to_string_lossy().into_owned(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                 },
                 config::RootConfig {
                     id: "root-b".to_string(),
                     path: root_b.path().to_string_lossy().into_owned(),
                     auto_sync: false,
                     remote_url: String::new(),
+                    sync_debounce_secs: 5,
                 },
             ]);
 
