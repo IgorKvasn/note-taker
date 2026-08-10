@@ -136,7 +136,7 @@ fn save_note(app: AppHandle, root_id: String, path: String, content: String) -> 
 fn create_note(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
     let note_path = config::resolve_path_in_root(&root_id, &path)?;
     notes::create_note(&note_path)?;
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(())
 }
 
@@ -144,7 +144,7 @@ fn create_note(app: AppHandle, root_id: String, path: String) -> Result<(), Stri
 fn create_folder(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
     let folder_path = config::resolve_path_in_root(&root_id, &path)?;
     notes::create_folder(&folder_path)?;
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(())
 }
 
@@ -156,7 +156,7 @@ fn create_folder(app: AppHandle, root_id: String, path: String) -> Result<(), St
 fn delete_item(app: AppHandle, root_id: String, path: String) -> Result<(), String> {
     let item_path = config::resolve_path_in_root(&root_id, &path)?;
     notes::delete_item(&item_path)?;
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(())
 }
 
@@ -171,13 +171,13 @@ fn move_item(
     let from = config::resolve_path_in_root(&root_id, &from_path)?;
     let to = config::resolve_path_in_root(&root_id, &to_path)?;
     notes::move_item(&root_path, &from, &to)?;
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(())
 }
 
 #[tauri::command]
 fn sync_root(app: AppHandle, root_id: String) -> Result<(), String> {
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(())
 }
 
@@ -218,21 +218,39 @@ fn mark_resolved(app: AppHandle, root_id: String, path: String) -> Result<(), St
     Ok(())
 }
 
-/// The one call every save/create command makes to kick the sync chain off as
-/// a background task (spec §7). A root that fails to resolve (e.g. a stale ID
-/// from a since-removed root) just skips sync silently -- the mutation itself
+/// The one call [`save_note`] makes to kick the sync chain off as a
+/// background task (spec §7), routed through the root's configured quiet
+/// period (issue #84) so a burst of keystroke-driven saves settles into a
+/// single trailing run. A root that fails to resolve (e.g. a stale ID from a
+/// since-removed root) just skips sync silently -- the mutation itself
 /// already succeeded, and there is nothing sensible to sync. `origin_path` is
-/// forwarded to [`sync::trigger_sync_delayed`] (issue #64) -- `Some` only for
-/// `save_note`. Routes through the root's configured quiet period (issue #84)
-/// rather than triggering the chain immediately; every caller does so for
-/// now, including tree mutations and manual sync -- #86 is what later
-/// exempts those.
+/// forwarded to [`sync::trigger_sync_delayed`] (issue #64). Note-content
+/// saves are the only trigger with keystrokes behind them and a successor
+/// edit worth waiting for; every other mutation uses
+/// [`trigger_sync_for_root_immediate`] instead (issue #86).
 fn trigger_sync_for_root(app: &AppHandle, root_id: &str, origin_path: Option<String>) {
     let Ok(root) = config::find_root_config(root_id) else {
         return;
     };
     let manager = app.state::<Arc<SyncManager>>().inner().clone();
     sync::trigger_sync_delayed(app.clone(), manager, root, origin_path);
+}
+
+/// Every non-save mutation's call to kick the sync chain off immediately
+/// (issue #86): tree structure changes (create/rename/move/delete),
+/// attachment writes/imports, attachment cleanup, and manual per-root sync
+/// are each a discrete, deliberate action with no keystrokes behind them and
+/// no successor edit to wait for, so there is nothing to gain by coalescing
+/// them behind [`trigger_sync_for_root`]'s delay -- "network's back, try
+/// again" must mean try now. Skips silently on an unresolvable root, same as
+/// [`trigger_sync_for_root`]. None of these callers have a save's content to
+/// attribute, so there is no `origin_path` parameter here.
+fn trigger_sync_for_root_immediate(app: &AppHandle, root_id: &str) {
+    let Ok(root) = config::find_root_config(root_id) else {
+        return;
+    };
+    let manager = app.state::<Arc<SyncManager>>().inner().clone();
+    sync::trigger_sync(app.clone(), manager, root, None);
 }
 
 /// Background attachment cleanup for every configured root, run once at
@@ -285,7 +303,7 @@ fn write_attachment(
 ) -> Result<String, String> {
     let root_path = config::find_root_path(&root_id)?;
     let reference = attachments::write_attachment(&root_path, &bytes, original_name.as_deref())?;
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(reference)
 }
 
@@ -304,7 +322,7 @@ fn import_attachment(
 ) -> Result<String, String> {
     let root_path = config::find_root_path(&root_id)?;
     let reference = attachments::import_attachment(&root_path, Path::new(&absolute_path))?;
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(reference)
 }
 
@@ -357,7 +375,7 @@ fn cleanup_attachments(
     );
 
     delete_orphaned_attachments(&preview)?;
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(())
 }
 
@@ -404,7 +422,7 @@ fn execute_attachment_cleanup(
     );
 
     delete_orphaned_attachments(&preview)?;
-    trigger_sync_for_root(&app, &root_id, None);
+    trigger_sync_for_root_immediate(&app, &root_id);
     Ok(preview)
 }
 
@@ -450,7 +468,7 @@ fn execute_attachment_cleanup_all_roots(
 
     delete_orphaned_attachments(&preview)?;
     for root in roots {
-        trigger_sync_for_root(&app, &root.id, None);
+        trigger_sync_for_root_immediate(&app, &root.id);
     }
     Ok(preview)
 }

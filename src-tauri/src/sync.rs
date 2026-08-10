@@ -3,11 +3,16 @@
 //! `git merge` -> re-push if clean, or report `conflict` if markers remain.
 //!
 //! Save and tree-mutation commands return as soon as their filesystem work is
-//! done; every one of them calls [`trigger_sync_delayed`] (issue #84) to kick
-//! the chain off as a background task rather than awaiting it. That delay
-//! sits in front of [`trigger_sync`]'s own busy/pending coalescing: a trigger
-//! arms or rearms a trailing-only per-root quiet period, and only once it
-//! elapses does the immediate `trigger_sync` path actually run.
+//! done, kicking the chain off as a background task rather than awaiting it.
+//! Only a note-content save routes through [`trigger_sync_delayed`] (issue
+//! #84), which arms or rearms a trailing-only per-root quiet period and only
+//! calls the immediate [`trigger_sync`] once it elapses -- coalescing a burst
+//! of keystrokes into one run. Every other trigger -- creating or renaming or
+//! moving or deleting an item, writing or importing an attachment, manual
+//! per-root sync, and startup catchup -- is a discrete, deliberate action
+//! with no keystrokes behind it, so it calls `trigger_sync` directly and
+//! commits immediately (issue #86), subject only to `trigger_sync`'s own
+//! busy/pending coalescing for concurrent triggers on the same root.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -117,12 +122,13 @@ impl SyncManager {
 }
 
 /// Kicks off the sync chain for `root` as a background task and returns
-/// immediately -- the immediate path underneath [`trigger_sync_delayed`]
-/// (issue #84), which is what every current caller actually calls; this stays
-/// `pub` for #86's future exemptions and for direct use by this module's own
-/// tests. `origin_path` is the root-relative path of the note whose save
-/// triggered this call, if any (issue #64); a trigger with no save behind it
-/// (a create, a delete, a manual sync) passes `None`.
+/// immediately. [`trigger_sync_delayed`] calls this once its own quiet-period
+/// timer elapses; every structural mutation, attachment write/import, manual
+/// per-root sync, and startup catchup calls this directly instead, since none
+/// of them have keystrokes behind them worth coalescing (issue #86).
+/// `origin_path` is the root-relative path of the note whose save triggered
+/// this call, if any (issue #64); a trigger with no save behind it (a create,
+/// a delete, a manual sync) passes `None`.
 pub fn trigger_sync(
     app: AppHandle,
     manager: Arc<SyncManager>,
@@ -209,10 +215,13 @@ pub fn trigger_sync_delayed(
 
 /// Startup catchup (issue #25): reactive-only sync leaves an interrupted push
 /// with nothing to ever retry it, so every configured root gets the same
-/// `trigger_sync` chain kicked off as `setup` returns. Each root's git work
-/// runs on `trigger_sync`'s background task, so this call itself never blocks
-/// the window from appearing or the last-open note from restoring, and one
-/// root's failure can't stop another's from running -- they're entirely
+/// `trigger_sync` chain kicked off as `setup` returns. Runs `trigger_sync`
+/// immediately rather than through [`trigger_sync_delayed`] (issue #86): work
+/// stranded from a previous session should be dealt with promptly, not held
+/// behind a countdown with no successor edit to wait for. Each root's git
+/// work runs on `trigger_sync`'s background task, so this call itself never
+/// blocks the window from appearing or the last-open note from restoring, and
+/// one root's failure can't stop another's from running -- they're entirely
 /// independent background tasks. `git push` is idempotent, so calling this
 /// again on a later launch (or if it somehow ran twice) is harmless.
 ///
@@ -221,7 +230,7 @@ pub fn trigger_sync_delayed(
 /// Tauri setup hook.
 pub fn run_startup_catchup(app: &AppHandle, manager: &Arc<SyncManager>, roots: Vec<RootConfig>) {
     for root in roots {
-        trigger_sync_delayed(app.clone(), manager.clone(), root, None);
+        trigger_sync(app.clone(), manager.clone(), root, None);
     }
 }
 
@@ -1411,6 +1420,81 @@ mod tests {
             remote_url: String::new(),
             sync_debounce_secs,
         }
+    }
+
+    /// Issue #86: `trigger_sync` is the shared immediate primitive behind
+    /// every structural mutation and manual sync -- unlike
+    /// `trigger_sync_delayed`, it must commit right away regardless of the
+    /// root's configured debounce, since none of those triggers have
+    /// keystrokes behind them worth coalescing.
+    #[test]
+    fn trigger_sync_commits_immediately_regardless_of_the_configured_debounce() {
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        write_and_stage(dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        // A generous debounce -- if trigger_sync respected it like
+        // trigger_sync_delayed does, the short wait_until bound below would
+        // never see a commit.
+        let root = root_config("root-1", dir.path(), 5);
+
+        trigger_sync(app, manager, root, None);
+
+        let committed = wait_until(Duration::from_millis(800), || commit_count(dir.path()) == 1);
+        assert!(
+            committed,
+            "trigger_sync must commit almost immediately, with no multi-second wait"
+        );
+    }
+
+    /// Issue #86's "an immediate trigger arriving while a delay is counting
+    /// down does not lose the pending note save": a note save arms
+    /// `trigger_sync_delayed`, then before its delay elapses a structural
+    /// mutation (e.g. a rename) fires `trigger_sync` directly on the same
+    /// root. The immediate call's `git add -A` picks up the note's
+    /// already-written content regardless of which call ends up owning the
+    /// commit, so the save must never be lost even though its own delayed
+    /// call is still pending.
+    #[test]
+    fn an_immediate_trigger_during_a_pending_delay_still_commits_the_saved_note() {
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        // Seed an initial commit so the working tree isn't empty at HEAD --
+        // matches a real root, where the note already exists before this save.
+        write_and_stage(dir.path(), "note.md", "base\n");
+        run_git(dir.path(), &["add", "-A"]).unwrap();
+        run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = root_config("root-1", dir.path(), 5);
+
+        // Simulates a note save: content lands on disk and the save's trigger
+        // arms the delay.
+        write_and_stage(dir.path(), "note.md", "saved content\n");
+        trigger_sync_delayed(
+            app.clone(),
+            manager.clone(),
+            root.clone(),
+            Some("note.md".to_string()),
+        );
+
+        // Simulates a concurrent structural mutation (e.g. a rename) firing
+        // the immediate path before the save's delay has elapsed.
+        trigger_sync(app, manager, root, None);
+
+        let committed = wait_until(Duration::from_millis(800), || commit_count(dir.path()) == 1);
+        assert!(
+            committed,
+            "the immediate trigger must commit promptly rather than waiting on the pending delay"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.md")).unwrap(),
+            "saved content\n",
+            "the note's saved content must survive, committed by the immediate trigger"
+        );
     }
 
     #[test]
