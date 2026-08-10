@@ -2,6 +2,7 @@ import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EditorView } from "@codemirror/view";
 import { NoteEditor } from "./NoteEditor";
 import type { EditorMode, ScanLinksResult, SyncStatusEvent } from "../ipc";
 
@@ -567,6 +568,294 @@ describe("NoteEditor", () => {
       const selection = window.getSelection();
       expect(editable.textContent).toBe("XLoaded");
       expect(selection?.anchorOffset).toBe(1);
+    });
+
+    describe("minimal-change sync refresh (issue #63)", () => {
+      /** CodeMirror renders each line as its own `.cm-line` div, so `textContent`
+       * across multiple lines never contains the `\n` that joins them in the doc. */
+      function withoutNewlines(text: string): string {
+        return text.replace(/\n/g, "");
+      }
+
+      /**
+       * Flushes a save for `typedSuffix` typed at the end of the loaded note,
+       * then delivers a sync-status event whose `open_note` re-fetch returns
+       * `remoteContent` -- content that genuinely differs from the buffer,
+       * the case that survives issue #62's identical-content guard.
+       */
+      async function syncInGenuinelyNewContent(remoteContent: string, typedSuffix = " edited") {
+        const user = userEvent.setup();
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await user.click(editable);
+        await user.keyboard(`{End}${typedSuffix}`);
+
+        await waitFor(() =>
+          expect(invoke).toHaveBeenCalledWith("save_note", {
+            rootId: "01ROOT",
+            path: "note.md",
+            content: expect.stringContaining(typedSuffix.trim()),
+          }),
+        );
+
+        mockInvoke({ open_note: { content: remoteContent, id: "01LOADED", is_conflicted: false } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await waitFor(() => expect(editable.textContent).toBe(withoutNewlines(remoteContent.trimEnd())));
+
+        return { user, editable };
+      }
+
+      it("applies only the changed region instead of replacing the whole document", async () => {
+        const { editable } = await syncInGenuinelyNewContent("Loaded edited\nappended by sync\n");
+
+        expect(editable.textContent).toBe("Loaded editedappended by sync");
+      });
+
+      it("preserves the caret when the incoming change is entirely after it", async () => {
+        const user = userEvent.setup();
+        mockInvoke({ open_note: { content: "one\ntwo\nthree\n", id: "01LOADED", is_conflicted: false } });
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await user.click(editable);
+        // Caret at offset 1, inside "one" -- well before where the remote change lands.
+        await user.keyboard("{Home}{Right}Z");
+        await screen.findByText("oZne");
+
+        await waitFor(() =>
+          expect(invoke).toHaveBeenCalledWith("save_note", {
+            rootId: "01ROOT",
+            path: "note.md",
+            content: "oZne\ntwo\nthree\n",
+          }),
+        );
+
+        mockInvoke({ open_note: { content: "oZne\ntwo\nthree\nfour\n", id: "01LOADED", is_conflicted: false } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await waitFor(() => expect(editable.textContent).toBe("oZnetwothreefour"));
+
+        expect(window.getSelection()?.anchorOffset).toBe(2);
+      });
+
+      it("shifts the caret by the edit's length when the incoming change is entirely before it", async () => {
+        const { editable } = await syncInGenuinelyNewContent("prefix added\nLoaded edited\n");
+
+        // Caret was at the end of "Loaded edited" (offset 13 in the old buffer);
+        // a 13-character insertion ("prefix added\n") before it shifts it to 26,
+        // still right after "edited" rather than resetting to 0 or the end.
+        expect(window.getSelection()?.anchorOffset).toBe(13);
+        expect(editable.textContent).toBe("prefix addedLoaded edited");
+      });
+
+      it("lands the caret somewhere inside the changed region when it was there originally", async () => {
+        const user = userEvent.setup();
+        mockInvoke({ open_note: { content: "one two three\n", id: "01LOADED", is_conflicted: false } });
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await user.click(editable);
+        // Caret lands in the middle of "two", inside the region that gets replaced below.
+        await user.keyboard("{Home}{Right}{Right}{Right}{Right}{Right}Z");
+        await screen.findByText("one tZwo three");
+
+        await waitFor(() =>
+          expect(invoke).toHaveBeenCalledWith("save_note", {
+            rootId: "01ROOT",
+            path: "note.md",
+            content: "one tZwo three\n",
+          }),
+        );
+
+        mockInvoke({ open_note: { content: "one CHANGED three\n", id: "01LOADED", is_conflicted: false } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await waitFor(() => expect(editable.textContent).toBe("one CHANGED three"));
+
+        const offset = window.getSelection()?.anchorOffset ?? -1;
+        // Somewhere within "one CHANGED three" (18 chars), not clamped to 0 or the end.
+        expect(offset).toBeGreaterThan(0);
+        expect(offset).toBeLessThan("one CHANGED three".length);
+      });
+
+      it("keeps an active selection intact when the sync changes an unrelated part of the note", async () => {
+        const user = userEvent.setup();
+        mockInvoke({ open_note: { content: "one two three\n", id: "01LOADED", is_conflicted: false } });
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await user.click(editable);
+        // Select "two" (offsets 4-7).
+        await user.keyboard("{Home}{Right}{Right}{Right}{Right}{Shift>}{Right}{Right}{Right}{/Shift}");
+
+        mockInvoke({ open_note: { content: "one two three-appended\n", id: "01LOADED", is_conflicted: false } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await waitFor(() => expect(editable.textContent).toBe("one two three-appended"));
+
+        // Asserted via CodeMirror's own state rather than the native DOM
+        // selection: jsdom doesn't reliably sync `window.getSelection()` to
+        // CodeMirror's internal selection outside of real browser layout.
+        const view = EditorView.findFromDOM(editable as HTMLElement);
+        expect(view?.state.selection.main).toMatchObject({ from: 4, to: 7 });
+      });
+
+      it("does not reset scroll position when the incoming change lands off-screen", async () => {
+        const { container } = render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        await screen.findByText("Loaded");
+
+        const scroller = container.querySelector(".cm-scroller") as HTMLElement;
+        scroller.scrollTop = 250;
+
+        mockInvoke({ open_note: { content: "Loaded\nappended far below\n", id: "01LOADED", is_conflicted: false } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await waitFor(() => expect(screen.queryByText("appended far below")).not.toBeNull());
+
+        expect(scroller.scrollTop).toBe(250);
+      });
+
+      it("keeps undo stepping through the user's own edits rather than dead-ending on the sync", async () => {
+        const user = userEvent.setup();
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await user.click(editable);
+        await user.keyboard("{End} mine");
+        await screen.findByText("Loaded mine");
+
+        await waitFor(() =>
+          expect(invoke).toHaveBeenCalledWith("save_note", {
+            rootId: "01ROOT",
+            path: "note.md",
+            content: "Loaded mine\n",
+          }),
+        );
+
+        mockInvoke({ open_note: { content: "Loaded mine appended\n", id: "01LOADED", is_conflicted: false } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await waitFor(() => expect(editable.textContent).toBe("Loaded mine appended"));
+
+        await user.keyboard("{Control>}z{/Control}");
+
+        // Undo reverts the user's own " mine" edit (skipping straight over the
+        // sync, which never entered the undo stack), not a no-op or a revert
+        // of the sync's own appended text.
+        await waitFor(() => expect(editable.textContent).toBe("Loaded appended"));
+      });
+
+      it("does not lose or reorder a keystroke typed while a sync is in flight", async () => {
+        const user = userEvent.setup();
+        let resolveOpenNote: (result: { content: string; id: string; is_conflicted: boolean }) => void = () => {};
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await screen.findByText("Loaded");
+
+        invoke.mockImplementation((command: string) => {
+          if (command === "open_note") {
+            return new Promise((resolve) => {
+              resolveOpenNote = resolve;
+            });
+          }
+          return Promise.resolve(undefined);
+        });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
+
+        // Typed while the re-fetch above is still in flight.
+        await user.click(editable);
+        await user.keyboard("{End} typed-during-sync");
+        await screen.findByText("Loaded typed-during-sync");
+
+        resolveOpenNote({ content: "Loaded remotely-changed\n", id: "01LOADED", is_conflicted: false });
+
+        // The in-flight sync's resolution must not overwrite the keystroke
+        // that arrived while it was pending.
+        await waitFor(() => expect(editable.textContent).toBe("Loaded typed-during-sync"));
+      });
+
+      it("applies two unrelated remote changes as separate hunks rather than one region spanning both", async () => {
+        const user = userEvent.setup();
+        mockInvoke({
+          open_note: {
+            content: "line0\nline1\nline2\nline3\nline4\nline5\n",
+            id: "01LOADED",
+            is_conflicted: false,
+          },
+        });
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await user.click(editable);
+        // Caret placed at the start of line2 (offset 12: "line0\n" + "line1\n"),
+        // between the two hunks the sync below introduces.
+        await user.keyboard("{Control>}{Home}{/Control}" + "{Right}".repeat(12) + "Z");
+        await screen.findByText("Zline2");
+
+        await waitFor(() =>
+          expect(invoke).toHaveBeenCalledWith("save_note", {
+            rootId: "01ROOT",
+            path: "note.md",
+            content: "line0\nline1\nZline2\nline3\nline4\nline5\n",
+          }),
+        );
+
+        // The sync changes line0 and appends after line5 -- two hunks on
+        // either side of the caret's line, with plain "Zline2" untouched
+        // in between.
+        mockInvoke({
+          open_note: {
+            content: "line0-CHANGED\nline1\nZline2\nline3\nline4\nline5\nline6\n",
+            id: "01LOADED",
+            is_conflicted: false,
+          },
+        });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await waitFor(() => expect(screen.queryByText("line6")).not.toBeNull());
+
+        // The caret's own line survived untouched, so its offset relative to
+        // that line's start (1, right after "Z") is preserved -- if the two
+        // remote hunks had collapsed into one region spanning line0 through
+        // line6, this line would have been swept up and the caret reset.
+        expect(window.getSelection()?.anchorOffset).toBe(1);
+      });
+
+      it("does not corrupt a CRLF note by applying character offsets computed on normalized text", async () => {
+        const user = userEvent.setup();
+        mockInvoke({ open_note: { content: "line1\r\nline2\r\nline3\r\n", id: "01LOADED", is_conflicted: false } });
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await user.click(editable);
+        await user.keyboard("{End} edited");
+
+        await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_note", expect.anything()));
+
+        mockInvoke({
+          open_note: { content: "line1\r\nline2 edited CHANGED\r\nline3\r\n", id: "01LOADED", is_conflicted: false },
+        });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+
+        await waitFor(() => expect(editable.textContent).toBe("line1line2 edited CHANGEDline3"));
+      });
+
+      it("does not split a surrogate pair when the incoming change lands next to an emoji", async () => {
+        const user = userEvent.setup();
+        mockInvoke({ open_note: { content: "note \u{1F600} end\n", id: "01LOADED", is_conflicted: false } });
+
+        render(<ControlledNoteEditor rootId="01ROOT" path="note.md" />);
+        const editable = await screen.findByRole("textbox");
+        await screen.findByText("note \u{1F600} end");
+        await user.click(editable);
+        await user.keyboard("{End} edited");
+
+        await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_note", expect.anything()));
+
+        mockInvoke({
+          open_note: { content: "note \u{1F601} end edited\n", id: "01LOADED", is_conflicted: false },
+        });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+
+        await waitFor(() => expect(editable.textContent).toBe("note \u{1F601} end edited"));
+      });
     });
 
     it("flushes a pending autosave before calling mark_resolved so the just-cleaned content is what gets read", async () => {

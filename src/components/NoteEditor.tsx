@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Annotation, EditorState } from "@codemirror/state";
+import { Annotation, EditorState, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -55,21 +55,233 @@ function moveCursorTo(view: EditorView, offset: number | undefined) {
   view.focus();
 }
 
-/** Replaces the document with freshly-read disk content, but only if it
- * actually differs from what's already in the buffer -- CodeMirror's `Text`
- * model always joins lines with `\n` (there's no lineSeparator facet
- * configured here), so a note with CRLF line endings on disk would compare
- * unequal to itself on every no-op refresh without normalizing first. An
- * identical whole-document replacement still diffs down to an empty change,
- * but CodeMirror resets the selection to 0 regardless, moving the caret even
- * though nothing actually changed. */
+/** CodeMirror's `Text` model always joins lines with `\n` (there's no
+ * lineSeparator facet configured here), so a note with CRLF line endings on
+ * disk would compare unequal to itself, and diff to a spurious full-document
+ * change, without normalizing first. */
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n/g, "\n");
+}
+
+/** Replaces the whole document with freshly-read disk content, but only if
+ * it actually differs from what's already in the buffer -- an identical
+ * whole-document replacement still diffs down to an empty change, but
+ * CodeMirror resets the selection to 0 regardless, moving the caret even
+ * though nothing actually changed. Used for the initial load of a note,
+ * where there's no prior buffer content worth preserving a caret/selection
+ * relative to. */
 function replaceContentIfChanged(view: EditorView, content: string) {
-  if (view.state.doc.toString().replace(/\r\n/g, "\n") === content.replace(/\r\n/g, "\n")) {
+  if (normalizeLineEndings(view.state.doc.toString()) === normalizeLineEndings(content)) {
     return;
   }
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: content },
     annotations: remoteContentLoad.of(true),
+  });
+}
+
+/** True if trimming the shared prefix/suffix at `index` (a UTF-16 code unit
+ * offset into both strings, which share every character up to the smaller of
+ * the two lengths at this boundary) would split a surrogate pair -- i.e.
+ * `index` falls right after a high surrogate that's followed by its low
+ * surrogate. Both strings agree on that pairing at a shared boundary, so
+ * checking either is equivalent; `text` is passed explicitly to avoid an
+ * extra parameter of "which string". */
+function splitsSurrogatePair(text: string, index: number): boolean {
+  return index > 0 && index < text.length && /[\uD800-\uDBFF]/.test(text[index - 1]) && /[\uDC00-\uDFFF]/.test(text[index]);
+}
+
+/** Finds the smallest single `{from, to, insert}` region that turns `oldText`
+ * into `newText`, by trimming the longest shared prefix and (from what's left)
+ * the longest shared suffix. Used within a single diff hunk (already known to
+ * be a contiguous changed run of lines from `diffLines` below), where it
+ * tightens a whole-line-range replacement down to just the changed word or
+ * phrase inside it. */
+function minimalReplaceRegion(oldText: string, newText: string): { from: number; to: number; insert: string } {
+  let prefixLength = 0;
+  const maxPrefix = Math.min(oldText.length, newText.length);
+  while (prefixLength < maxPrefix && oldText[prefixLength] === newText[prefixLength]) {
+    prefixLength += 1;
+  }
+  if (splitsSurrogatePair(oldText, prefixLength)) {
+    prefixLength -= 1;
+  }
+
+  let suffixLength = 0;
+  const maxSuffix = Math.min(oldText.length, newText.length) - prefixLength;
+  while (
+    suffixLength < maxSuffix &&
+    oldText[oldText.length - 1 - suffixLength] === newText[newText.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+  if (splitsSurrogatePair(oldText, oldText.length - suffixLength)) {
+    suffixLength -= 1;
+  }
+
+  return {
+    from: prefixLength,
+    to: oldText.length - suffixLength,
+    insert: newText.slice(prefixLength, newText.length - suffixLength),
+  };
+}
+
+/** Splits text into lines, each retaining its trailing `\n` (the last line
+ * doesn't have one) -- keeping the separator on each entry means concatenating
+ * a slice of lines reproduces the exact original substring, so line indices
+ * convert directly to character offsets by summing lengths. */
+function splitIntoLines(text: string): string[] {
+  const lines = text.split("\n");
+  return lines.map((line, index) => (index < lines.length - 1 ? line + "\n" : line));
+}
+
+/** Longest common subsequence of two line arrays, as the classic DP table
+ * (`table[i][j]` = LCS length of `oldLines[i..]` and `newLines[j..]`). This is
+ * O(n*m), so callers must first trim any shared prefix/suffix lines (see
+ * `diffLines` below) to keep the table sized to just the changed span rather
+ * than the whole document. */
+function longestCommonSubsequenceTable(oldLines: readonly string[], newLines: readonly string[]): number[][] {
+  const table: number[][] = Array.from({ length: oldLines.length + 1 }, () => new Array(newLines.length + 1).fill(0));
+  for (let i = oldLines.length - 1; i >= 0; i -= 1) {
+    for (let j = newLines.length - 1; j >= 0; j -= 1) {
+      table[i][j] =
+        oldLines[i] === newLines[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  return table;
+}
+
+/** A contiguous run of changed lines: `[oldLineStart, oldLineEnd)` in
+ * `oldLines` is replaced by `[newLineStart, newLineEnd)` in `newLines`. */
+interface LineHunk {
+  oldLineStart: number;
+  oldLineEnd: number;
+  newLineStart: number;
+  newLineEnd: number;
+}
+
+/** Runs the LCS table + hunk walk on the full (already-trimmed) line arrays;
+ * split out from `diffLines` so the trimming there can shrink its input
+ * first without complicating this walk with offset bookkeeping. */
+function diffTrimmedLines(oldLines: readonly string[], newLines: readonly string[]): LineHunk[] {
+  const table = longestCommonSubsequenceTable(oldLines, newLines);
+  const hunks: LineHunk[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < oldLines.length || j < newLines.length) {
+    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    const oldLineStart = i;
+    const newLineStart = j;
+    while (
+      (i < oldLines.length || j < newLines.length) &&
+      !(i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j])
+    ) {
+      // Follow whichever branch the LCS table says preserves the longest
+      // remaining common subsequence, matching how the table was filled.
+      if (j >= newLines.length || (i < oldLines.length && table[i + 1][j] >= table[i][j + 1])) {
+        i += 1;
+      } else {
+        j += 1;
+      }
+    }
+    hunks.push({ oldLineStart, oldLineEnd: i, newLineStart, newLineEnd: j });
+  }
+  return hunks;
+}
+
+/** Diffs two line arrays into hunks, walking the LCS table to collect maximal
+ * runs of non-matching lines -- unlike a single prefix/suffix trim over the
+ * whole text, this keeps multiple unrelated changes (e.g. a fix near the top
+ * and an appended line at the bottom) as separate hunks instead of collapsing
+ * everything between them into one giant replaced region.
+ *
+ * Before building the O(n*m) LCS table, shared leading and trailing lines are
+ * trimmed off first -- the common case is a sync bringing in a small, local
+ * change to an otherwise-unchanged note, so this keeps the table (and its
+ * runtime) sized to just the changed span rather than the whole document. */
+function diffLines(oldLines: readonly string[], newLines: readonly string[]): LineHunk[] {
+  const maxCommon = Math.min(oldLines.length, newLines.length);
+
+  let commonPrefix = 0;
+  while (commonPrefix < maxCommon && oldLines[commonPrefix] === newLines[commonPrefix]) {
+    commonPrefix += 1;
+  }
+
+  let commonSuffix = 0;
+  const maxSuffix = maxCommon - commonPrefix;
+  while (
+    commonSuffix < maxSuffix &&
+    oldLines[oldLines.length - 1 - commonSuffix] === newLines[newLines.length - 1 - commonSuffix]
+  ) {
+    commonSuffix += 1;
+  }
+
+  const trimmedOldLines = oldLines.slice(commonPrefix, oldLines.length - commonSuffix);
+  const trimmedNewLines = newLines.slice(commonPrefix, newLines.length - commonSuffix);
+
+  return diffTrimmedLines(trimmedOldLines, trimmedNewLines).map((hunk) => ({
+    oldLineStart: hunk.oldLineStart + commonPrefix,
+    oldLineEnd: hunk.oldLineEnd + commonPrefix,
+    newLineStart: hunk.newLineStart + commonPrefix,
+    newLineEnd: hunk.newLineEnd + commonPrefix,
+  }));
+}
+
+/** Converts each line-level hunk into a character-offset `{from, to, insert}`
+ * change against `oldText`, tightened via `minimalReplaceRegion` so a hunk
+ * that only changes a word within otherwise-identical lines doesn't replace
+ * those lines wholesale. */
+function hunksToChanges(
+  hunks: readonly LineHunk[],
+  oldLines: readonly string[],
+  newLines: readonly string[],
+): { from: number; to: number; insert: string }[] {
+  const oldLineOffsets = [0];
+  for (const line of oldLines) {
+    oldLineOffsets.push(oldLineOffsets[oldLineOffsets.length - 1] + line.length);
+  }
+
+  return hunks.map((hunk) => {
+    const from = oldLineOffsets[hunk.oldLineStart];
+    const oldSlice = oldLines.slice(hunk.oldLineStart, hunk.oldLineEnd).join("");
+    const newSlice = newLines.slice(hunk.newLineStart, hunk.newLineEnd).join("");
+    const region = minimalReplaceRegion(oldSlice, newSlice);
+    return { from: from + region.from, to: from + region.to, insert: region.insert };
+  });
+}
+
+/** Applies freshly-read disk content for a note that's already open, as a
+ * set of minimal per-hunk changes rather than a whole-document replacement
+ * (issue #63) -- a no-op when the content, modulo line-ending normalization,
+ * hasn't actually changed. The diff runs against `view.state.doc.toString()`,
+ * which (like `content` once normalized) always uses `\n`, so the computed
+ * offsets are valid to dispatch straight against the live document --
+ * diffing against a separately-normalized copy of the old text would compute
+ * offsets in the wrong coordinate space whenever disk content has CRLF
+ * endings. Dispatching only the changed regions, with no explicit
+ * `selection`, lets CodeMirror map the caret and selection through the
+ * change the same way it does for a local edit: untouched if every change
+ * falls elsewhere, shifted if a change is before the caret, landing inside a
+ * hunk's replacement if the caret was inside it. Scroll position is left
+ * alone for the same reason -- no `scrollIntoView` effect is added.
+ * `addToHistory: false` keeps the sync out of undo history, so undo still
+ * walks back through the user's own edits rather than dead-ending here. */
+function applyRemoteChangeIfChanged(view: EditorView, content: string) {
+  const oldText = view.state.doc.toString();
+  const newText = normalizeLineEndings(content);
+  if (oldText === newText) {
+    return;
+  }
+  const oldLines = splitIntoLines(oldText);
+  const newLines = splitIntoLines(newText);
+  const changes = hunksToChanges(diffLines(oldLines, newLines), oldLines, newLines);
+  view.dispatch({
+    changes,
+    annotations: [remoteContentLoad.of(true), Transaction.addToHistory.of(false)],
   });
 }
 
@@ -302,7 +514,7 @@ export function NoteEditor({
           ) {
             return;
           }
-          replaceContentIfChanged(viewRef.current, result.content);
+          applyRemoteChangeIfChanged(viewRef.current, result.content);
           setContent(result.content);
           setIsConflicted(result.is_conflicted);
         })
