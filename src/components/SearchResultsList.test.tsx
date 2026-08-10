@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SearchResultsList } from "./SearchResultsList";
 import type { RootConfig, SearchResult } from "../ipc";
 
-const ROOT_A: RootConfig = { id: "01ROOT-A", path: "/home/user/notes", auto_sync: false, remote_url: "" };
+const ROOT_A: RootConfig = { id: "01ROOT-A", path: "/home/user/notes", auto_sync: false, remote_url: "", sync_debounce_secs: 5 };
 
 function result(overrides: Partial<SearchResult> = {}): SearchResult {
   return {

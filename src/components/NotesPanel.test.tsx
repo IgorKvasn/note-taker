@@ -30,8 +30,8 @@ const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
-const ROOT_A: RootConfig = { id: "01ROOT-A", path: "/home/user/notes", auto_sync: false, remote_url: "" };
-const ROOT_B: RootConfig = { id: "01ROOT-B", path: "/home/user/work-notes", auto_sync: false, remote_url: "" };
+const ROOT_A: RootConfig = { id: "01ROOT-A", path: "/home/user/notes", auto_sync: false, remote_url: "", sync_debounce_secs: 5 };
+const ROOT_B: RootConfig = { id: "01ROOT-B", path: "/home/user/work-notes", auto_sync: false, remote_url: "", sync_debounce_secs: 5 };
 
 function folder(name: string, path: string, children: TreeNode[] = []): TreeNode {
   return { name, path, is_directory: true, children };

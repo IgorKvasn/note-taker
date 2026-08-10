@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent }) }));
 
-const EMPTY_CONFIG: Config = { version: 1, roots: [{ id: "01ROOT", path: "/notes", auto_sync: false, remote_url: "" }] };
+const EMPTY_CONFIG: Config = { version: 1, roots: [{ id: "01ROOT", path: "/notes", auto_sync: false, remote_url: "", sync_debounce_secs: 5 }] };
 
 function mockInvoke(overrides: Record<string, unknown> = {}) {
   invoke.mockImplementation((command: string, args?: unknown) => {
@@ -148,7 +148,7 @@ describe("App", () => {
   });
 
   it("proceeds to the two-pane layout once first-run setup saves a config", async () => {
-    const savedConfig: Config = { version: 1, roots: [{ id: "01NEW", path: "/home/notes", auto_sync: false, remote_url: "" }] };
+    const savedConfig: Config = { version: 1, roots: [{ id: "01NEW", path: "/home/notes", auto_sync: false, remote_url: "", sync_debounce_secs: 5 }] };
     mockInvoke({
       get_config: { type: "missing" } satisfies ConfigOutcome,
       pick_folder: "/home/notes",
@@ -628,8 +628,8 @@ describe("App", () => {
     const config: Config = {
       version: 1,
       roots: [
-        { id: "01ROOT-A", path: "/notes-a", auto_sync: false, remote_url: "" },
-        { id: "01ROOT-B", path: "/notes-b", auto_sync: false, remote_url: "" },
+        { id: "01ROOT-A", path: "/notes-a", auto_sync: false, remote_url: "", sync_debounce_secs: 5 },
+        { id: "01ROOT-B", path: "/notes-b", auto_sync: false, remote_url: "", sync_debounce_secs: 5 },
       ],
     };
     mockInvoke({
@@ -681,8 +681,8 @@ describe("App", () => {
     const config: Config = {
       version: 1,
       roots: [
-        { id: "01ROOT-A", path: "/notes-a", auto_sync: false, remote_url: "" },
-        { id: "01ROOT-B", path: "/notes-b", auto_sync: false, remote_url: "" },
+        { id: "01ROOT-A", path: "/notes-a", auto_sync: false, remote_url: "", sync_debounce_secs: 5 },
+        { id: "01ROOT-B", path: "/notes-b", auto_sync: false, remote_url: "", sync_debounce_secs: 5 },
       ],
     };
     mockInvoke({

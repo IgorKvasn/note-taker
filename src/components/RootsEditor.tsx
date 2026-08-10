@@ -19,6 +19,7 @@ interface RootRow {
   path: string;
   autoSync: boolean;
   remoteUrl: string;
+  syncDebounceSecs: number;
   exists: boolean;
   createIfMissing: boolean;
 }
@@ -41,6 +42,7 @@ function toRow(root: RootConfig, exists: boolean): RootRow {
     path: root.path,
     autoSync: root.auto_sync,
     remoteUrl: root.remote_url,
+    syncDebounceSecs: root.sync_debounce_secs,
     exists,
     createIfMissing: false,
   };
@@ -64,13 +66,25 @@ function findDuplicatePaths(rows: RootRow[]): Set<string> {
   return duplicates;
 }
 
+function findOutOfRangeDelays(rows: RootRow[]): Set<string> {
+  const outOfRange = new Set<string>();
+  for (const row of rows) {
+    if (row.syncDebounceSecs < 1 || row.syncDebounceSecs > 300) {
+      outOfRange.add(row.key);
+    }
+  }
+  return outOfRange;
+}
+
 export function RootsEditor({ initialRoots, canCancel, onSaved, onCancel }: RootsEditorProps) {
   const [rows, setRows] = useState<RootRow[]>(() => initialRoots.map((root) => toRow(root, true)));
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const duplicatePaths = findDuplicatePaths(rows);
-  const canSave = rows.length > 0 && !isSaving && duplicatePaths.size === 0;
+  const outOfRangeDelays = findOutOfRangeDelays(rows);
+  const canSave =
+    rows.length > 0 && !isSaving && duplicatePaths.size === 0 && outOfRangeDelays.size === 0;
 
   async function handleAdd() {
     const path = await invoke<string | null>(COMMAND_PICK_FOLDER);
@@ -88,6 +102,7 @@ export function RootsEditor({ initialRoots, canCancel, onSaved, onCancel }: Root
         path,
         autoSync: false,
         remoteUrl: validation.remote_url ?? "",
+        syncDebounceSecs: 5,
         exists: validation.exists,
         createIfMissing: false,
       },
@@ -128,6 +143,7 @@ export function RootsEditor({ initialRoots, canCancel, onSaved, onCancel }: Root
       auto_sync: row.autoSync,
       remote_url: row.remoteUrl,
       create_if_missing: row.createIfMissing,
+      sync_debounce_secs: row.syncDebounceSecs,
     }));
 
     try {
@@ -197,11 +213,28 @@ export function RootsEditor({ initialRoots, canCancel, onSaved, onCancel }: Root
                 />
                 Auto sync
               </label>
+              <label className="roots-editor__field">
+                Sync delay after typing (seconds)
+                <input
+                  type="number"
+                  min={1}
+                  max={300}
+                  value={row.syncDebounceSecs}
+                  onChange={(event) =>
+                    updateRow(row.key, { syncDebounceSecs: Number(event.target.value) })
+                  }
+                />
+              </label>
             </div>
 
             {duplicatePaths.has(row.path) && (
               <p className="roots-editor__error" role="alert">
                 This path is already in the list.
+              </p>
+            )}
+            {outOfRangeDelays.has(row.key) && (
+              <p className="roots-editor__error" role="alert">
+                Sync delay must be between 1 and 300 seconds.
               </p>
             )}
           </li>

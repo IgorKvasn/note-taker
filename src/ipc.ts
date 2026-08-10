@@ -45,6 +45,7 @@ export interface RootConfig {
   path: string;
   auto_sync: boolean;
   remote_url: string;
+  sync_debounce_secs: number;
 }
 
 /** Mirrors `Config` in `src-tauri/src/config.rs`. */
@@ -78,6 +79,7 @@ export interface RootDraft {
   auto_sync: boolean;
   remote_url: string;
   create_if_missing: boolean;
+  sync_debounce_secs: number;
 }
 
 /** Mirrors `TreeNode` in `src-tauri/src/tree.rs`. */

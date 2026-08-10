@@ -12,6 +12,7 @@ const EXISTING_ROOT: RootConfig = {
   path: "/home/user/notes",
   auto_sync: true,
   remote_url: "git@example.com:user/notes.git",
+  sync_debounce_secs: 5,
 };
 
 function emptyValidation(overrides: Partial<RootValidation> = {}): RootValidation {
@@ -132,11 +133,62 @@ describe("RootsEditor", () => {
             auto_sync: EXISTING_ROOT.auto_sync,
             remote_url: EXISTING_ROOT.remote_url,
             create_if_missing: false,
+            sync_debounce_secs: EXISTING_ROOT.sync_debounce_secs,
           },
         ],
       }),
     );
     expect(onSaved).toHaveBeenCalledWith(savedConfig);
+  });
+
+  it("edits the sync delay and persists it for that root on save", async () => {
+    const savedConfig: Config = { version: 1, roots: [EXISTING_ROOT] };
+    invoke.mockResolvedValue(savedConfig);
+    const onSaved = vi.fn();
+
+    render(
+      <RootsEditor initialRoots={[EXISTING_ROOT]} canCancel={false} onSaved={onSaved} />,
+    );
+
+    const delayInput = screen.getByLabelText(
+      "Sync delay after typing (seconds)",
+    ) as HTMLInputElement;
+    expect(delayInput.value).toBe(String(EXISTING_ROOT.sync_debounce_secs));
+
+    await userEvent.clear(delayInput);
+    await userEvent.type(delayInput, "42");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_config", {
+        drafts: [
+          {
+            id: EXISTING_ROOT.id,
+            path: EXISTING_ROOT.path,
+            auto_sync: EXISTING_ROOT.auto_sync,
+            remote_url: EXISTING_ROOT.remote_url,
+            create_if_missing: false,
+            sync_debounce_secs: 42,
+          },
+        ],
+      }),
+    );
+    expect(onSaved).toHaveBeenCalledWith(savedConfig);
+  });
+
+  it("shows an inline error and disables Save when the sync delay is out of range", async () => {
+    render(
+      <RootsEditor initialRoots={[EXISTING_ROOT]} canCancel={false} onSaved={vi.fn()} />,
+    );
+
+    const delayInput = screen.getByLabelText("Sync delay after typing (seconds)");
+    await userEvent.clear(delayInput);
+    await userEvent.type(delayInput, "301");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Sync delay must be between 1 and 300 seconds.");
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
   });
 
   it("shows the backend error and keeps the draft editable when save fails", async () => {
