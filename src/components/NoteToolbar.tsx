@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
 import type { LinkedNote } from "../ipc";
 import { NoteLinkPicker } from "./NoteLinkPicker";
@@ -22,6 +22,54 @@ interface NoteToolbarProps {
   view: EditorView | null;
   /** Linkable notes in the current root; same-root only by design. */
   linkableNotes?: LinkedNote[];
+  /** Opens the native file picker and attaches the chosen image (spec §11.1). */
+  onAttachImageFile?: () => void;
+  /** Disables 🖼 while an attach (paste, drop, or picker) is in flight, in
+   * addition to the existing `view === null` rule. */
+  isAttaching?: boolean;
+}
+
+interface ImageMenuProps {
+  onInsertUrl: () => void;
+  onAttachFile: () => void;
+  onClose: () => void;
+}
+
+/** The 🖼 button's menu (spec §11.1) -- the toolbar's one exception to the
+ * flat-row-no-dropdowns framing, since one glyph now maps to two distinct
+ * actions with no natural default for a bare click. Dismissed like
+ * `TreeContextMenu`: click-away, Escape, or item selection. */
+function ImageMenu({ onInsertUrl, onAttachFile, onClose }: ImageMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (menuRef.current !== null && !menuRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="note-toolbar__image-menu" role="menu">
+      <button type="button" role="menuitem" onClick={onInsertUrl}>
+        Insert image URL…
+      </button>
+      <button type="button" role="menuitem" onClick={onAttachFile}>
+        Attach image file…
+      </button>
+    </div>
+  );
 }
 
 interface ToolbarButtonSpec {
@@ -71,15 +119,20 @@ const GROUPS: ToolbarButtonSpec[][] = [
       run: (view) => view.dispatch(toggleBlockquote(view.state)),
     },
     { label: "🔗", title: "Link (Ctrl/Cmd+K)", run: (view) => view.dispatch(insertLink(view.state)) },
-    { label: "🖼", title: "Image", run: (view) => view.dispatch(insertImage(view.state)) },
     { label: "⊞", title: "Table", run: (view) => view.dispatch(insertTable(view.state)) },
     { label: "{ }", title: "Code block", run: (view) => view.dispatch(insertCodeBlock(view.state)) },
     { label: "—", title: "Horizontal rule", run: (view) => view.dispatch(insertHorizontalRule(view.state)) },
   ],
 ];
 
-export function NoteToolbar({ view, linkableNotes = [] }: NoteToolbarProps) {
+export function NoteToolbar({
+  view,
+  linkableNotes = [],
+  onAttachImageFile,
+  isAttaching = false,
+}: NoteToolbarProps) {
   const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [isImageMenuOpen, setIsImageMenuOpen] = useState(false);
 
   return (
     <div className="note-toolbar" data-testid="note-toolbar">
@@ -104,6 +157,33 @@ export function NoteToolbar({ view, linkableNotes = [] }: NoteToolbarProps) {
           ))}
         </div>
       ))}
+      <div className="note-toolbar__group note-toolbar__group--image">
+        <button
+          type="button"
+          className="note-toolbar__button"
+          title="Image"
+          disabled={view === null || isAttaching}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setIsImageMenuOpen(true)}
+        >
+          🖼
+        </button>
+        {isImageMenuOpen && (
+          <ImageMenu
+            onClose={() => setIsImageMenuOpen(false)}
+            onInsertUrl={() => {
+              setIsImageMenuOpen(false);
+              if (view !== null) {
+                dispatchCommand(view, (target) => target.dispatch(insertImage(target.state)));
+              }
+            }}
+            onAttachFile={() => {
+              setIsImageMenuOpen(false);
+              onAttachImageFile?.();
+            }}
+          />
+        )}
+      </div>
       <div className="note-toolbar__group">
         <button
           type="button"

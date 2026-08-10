@@ -47,13 +47,15 @@
   white-space: nowrap;
 }
 
-.roots-editor__remove {
+.roots-editor__remove,
+.roots-editor__cleanup {
   border: 1px solid var(--border-color);
   border-radius: 6px;
   background-color: var(--surface-raised);
   color: inherit;
   font: inherit;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .roots-editor__row-fields {

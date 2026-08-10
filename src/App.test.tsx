@@ -8,8 +8,10 @@ const invoke = vi.hoisted(() => vi.fn());
 const listen = vi.hoisted(() => vi.fn());
 const openUrl = vi.hoisted(() => vi.fn());
 
+const onDragDropEvent = vi.hoisted(() => vi.fn(() => Promise.resolve(() => {})));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
+vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent }) }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 
 const EMPTY_CONFIG: Config = { version: 1, roots: [{ id: "01ROOT", path: "/notes", auto_sync: false, remote_url: "" }] };

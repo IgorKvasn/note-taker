@@ -7,14 +7,17 @@ import { copyToClipboard } from "./clipboard";
 import { Toast } from "./Toast";
 import { useToasts } from "../hooks/useToasts";
 import { BROKEN_NOTE_LINK_TITLE, NOTE_LINK_PROTOCOL, NOTE_LINK_SCHEME, noteLinkTarget } from "./noteLinks";
+import { ATTACHMENT_PROTOCOL, ATTACHMENT_SCHEME, BROKEN_ATTACHMENT_TITLE, attachmentTarget } from "./attachments";
 import "./NoteView.css";
 
 /**
  * Rendered notes are untrusted input -- they arrive by git from other machines
- * (spec §9.2) -- so this widens `defaultSchema` by exactly two things: the
- * `hljs` class names syntax highlighting needs, and the `note:` href protocol
- * carrying a cross-note link's ULID. `src` is deliberately left alone, so
- * `![alt](note:...)` stays blocked; only anchors may use the scheme.
+ * (spec §9.2) -- so this widens `defaultSchema` by exactly two things beyond
+ * the `hljs` class names syntax highlighting needs: the `note:` href protocol
+ * carrying a cross-note link's ULID, and the `attachment:` src protocol
+ * carrying an image's ULID. The widening is asymmetric (spec §11.4): `note:`
+ * is href-only (it's not an image to render), `attachment:` is src-only (it's
+ * not a navigation target).
  */
 const SANITIZE_SCHEMA = {
   ...defaultSchema,
@@ -25,22 +28,34 @@ const SANITIZE_SCHEMA = {
   protocols: {
     ...defaultSchema.protocols,
     href: [...(defaultSchema.protocols?.href ?? []), NOTE_LINK_SCHEME],
+    src: [...(defaultSchema.protocols?.src ?? []), ATTACHMENT_SCHEME],
   },
 };
 
 /**
  * `react-markdown` blanks any URL outside its own hardcoded protocol list
  * *before* rehype plugins run, so widening `SANITIZE_SCHEMA` alone is not
- * enough to let a `note:` href through. This lets exactly that scheme past and
- * defers every other URL to the stock transform.
+ * enough to let a `note:` href or `attachment:` src through. This lets those
+ * two schemes past and defers every other URL to the stock transform.
  *
- * It applies to `src` as well as `href`, but nothing is widened by that:
- * `SANITIZE_SCHEMA` still restricts `src` to http(s), so an
- * `![alt](note:...)` image is stripped downstream.
+ * Each scheme is still restricted to one attribute by `SANITIZE_SCHEMA`
+ * itself: an `![alt](note:...)` image's `src` is stripped downstream, as is a
+ * `[text](attachment:...)` link's `href`.
  */
 function allowNoteSchemeUrl(url: string): string {
-  return url.startsWith(NOTE_LINK_PROTOCOL) ? url : defaultUrlTransform(url);
+  return url.startsWith(NOTE_LINK_PROTOCOL) || url.startsWith(ATTACHMENT_PROTOCOL) ? url : defaultUrlTransform(url);
 }
+
+/**
+ * Resolves an `attachment:` ULID to a displayable `blob:` URL, or `null` if
+ * the file isn't found. `undefined` means resolution is still in flight.
+ *
+ * Owned above `NoteView` rather than as a component-local hook (spec §11.4):
+ * `NoteView` unmounts on every Edit/Preview toggle, and caching by
+ * `(rootId, id)` above that point means a blob URL survives the toggle
+ * instead of being re-fetched and re-minted every time.
+ */
+type ResolveAttachment = (id: string) => string | null | undefined;
 
 interface NoteViewProps {
   content: string;
@@ -51,6 +66,8 @@ interface NoteViewProps {
    */
   resolveNoteLink?: (id: string) => string | null;
   onOpenNoteLink?: (path: string) => void;
+  /** Resolves `attachment:` image references; see `ResolveAttachment`. */
+  resolveAttachment?: ResolveAttachment;
 }
 
 interface CopyableBlockProps {
@@ -145,7 +162,46 @@ function NoteLink({ href, children, resolveNoteLink, onOpenNoteLink, ...anchorPr
   );
 }
 
-export function NoteView({ content, resolveNoteLink, onOpenNoteLink }: NoteViewProps) {
+interface AttachmentProps extends React.ComponentPropsWithoutRef<"img"> {
+  resolveAttachment: ResolveAttachment | undefined;
+}
+
+/**
+ * Renders an `attachment:` src as an image via the resolver's cached `blob:`
+ * URL, and leaves every other src exactly as it was.
+ *
+ * Three visually distinct states (spec §11.4) so a slow sync is never
+ * mistaken for a permanently-missing file: resolved (the image), loading (a
+ * neutral placeholder, no tooltip), missing (a distinct placeholder, with a
+ * tooltip, `data-testid="broken-attachment"`).
+ */
+function Attachment({ src, alt, resolveAttachment, ...imgProps }: AttachmentProps) {
+  const targetId = attachmentTarget(src);
+  if (targetId === null) {
+    // eslint-disable-next-line jsx-a11y/alt-text -- alt is already in imgProps
+    return <img src={src} alt={alt} {...imgProps} />;
+  }
+
+  const resolved = resolveAttachment === undefined ? null : resolveAttachment(targetId);
+
+  if (resolved === undefined) {
+    return <span className="note-view__attachment-placeholder note-view__attachment-placeholder--loading" />;
+  }
+
+  if (resolved === null) {
+    return (
+      <span
+        className="note-view__attachment-placeholder note-view__attachment-placeholder--broken"
+        title={BROKEN_ATTACHMENT_TITLE}
+        data-testid="broken-attachment"
+      />
+    );
+  }
+
+  return <img {...imgProps} src={resolved} alt={alt} />;
+}
+
+export function NoteView({ content, resolveNoteLink, onOpenNoteLink, resolveAttachment }: NoteViewProps) {
   const { toasts, showToast } = useToasts();
 
   return (
@@ -169,6 +225,9 @@ export function NoteView({ content, resolveNoteLink, onOpenNoteLink }: NoteViewP
             <NoteLink {...anchorProps} resolveNoteLink={resolveNoteLink} onOpenNoteLink={onOpenNoteLink}>
               {children}
             </NoteLink>
+          ),
+          img: ({ node: _node, ...imgProps }) => (
+            <Attachment {...imgProps} resolveAttachment={resolveAttachment} />
           ),
         }}
       >

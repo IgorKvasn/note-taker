@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RootsEditor } from "./RootsEditor";
-import type { Config, RootConfig, RootValidation } from "../ipc";
+import type { Config, DeletedAttachment, RootConfig, RootValidation } from "../ipc";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -198,5 +198,122 @@ describe("RootsEditor", () => {
     render(<RootsEditor initialRoots={[]} canCancel={false} onSaved={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("does not offer attachment cleanup for a root added this session", () => {
+    render(<RootsEditor initialRoots={[]} canCancel={false} onSaved={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: /Clean up unused attachments/ })).toBeNull();
+  });
+
+  describe("attachment cleanup", () => {
+    const candidates: DeletedAttachment[] = [
+      { file_name: "01A-orphan.png", size_bytes: 1024 * 1024 },
+      { file_name: "01B-orphan.png", size_bytes: 512 * 1024 },
+    ];
+
+    it("shows a toast directly when a dry run finds nothing to delete", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "cleanup_unused_attachments") return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(<RootsEditor initialRoots={[EXISTING_ROOT]} canCancel={false} onSaved={vi.fn()} />);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: `Clean up unused attachments in ${EXISTING_ROOT.path}` }),
+      );
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("cleanup_unused_attachments", {
+          rootId: EXISTING_ROOT.id,
+          openBufferContent: null,
+          dryRun: true,
+        }),
+      );
+      expect(await screen.findByText("No unused attachments found.")).toBeDefined();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("shows a confirmation dialog with count and size when the dry run finds candidates", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "cleanup_unused_attachments") return Promise.resolve(candidates);
+        return Promise.resolve(undefined);
+      });
+
+      render(<RootsEditor initialRoots={[EXISTING_ROOT]} canCancel={false} onSaved={vi.fn()} />);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: `Clean up unused attachments in ${EXISTING_ROOT.path}` }),
+      );
+
+      expect(await screen.findByRole("dialog")).toBeDefined();
+      expect(screen.getByText("2 unused attachments, 1.5 MB — Delete?")).toBeDefined();
+    });
+
+    it("re-invokes with dryRun false on confirm and reports the deleted count", async () => {
+      invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+        if (command === "cleanup_unused_attachments") {
+          return Promise.resolve(args?.dryRun === true ? candidates : candidates);
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<RootsEditor initialRoots={[EXISTING_ROOT]} canCancel={false} onSaved={vi.fn()} />);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: `Clean up unused attachments in ${EXISTING_ROOT.path}` }),
+      );
+      await screen.findByRole("dialog");
+
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("cleanup_unused_attachments", {
+          rootId: EXISTING_ROOT.id,
+          openBufferContent: null,
+          dryRun: false,
+        }),
+      );
+      expect(await screen.findByText("Deleted 2 unused attachments (1.5 MB).")).toBeDefined();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("closes the dialog without deleting when cancelled", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "cleanup_unused_attachments") return Promise.resolve(candidates);
+        return Promise.resolve(undefined);
+      });
+
+      render(<RootsEditor initialRoots={[EXISTING_ROOT]} canCancel={false} onSaved={vi.fn()} />);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: `Clean up unused attachments in ${EXISTING_ROOT.path}` }),
+      );
+      await screen.findByRole("dialog");
+      invoke.mockClear();
+
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("shows an error and does not open the dialog when the dry run fails", async () => {
+      invoke.mockImplementation((command: string) => {
+        if (command === "cleanup_unused_attachments") return Promise.reject(new Error("root not found"));
+        return Promise.resolve(undefined);
+      });
+
+      render(<RootsEditor initialRoots={[EXISTING_ROOT]} canCancel={false} onSaved={vi.fn()} />);
+
+      await userEvent.click(
+        screen.getByRole("button", { name: `Clean up unused attachments in ${EXISTING_ROOT.path}` }),
+      );
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("root not found");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
   });
 });

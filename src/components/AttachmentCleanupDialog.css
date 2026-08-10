@@ -1,0 +1,58 @@
+.attachment-cleanup-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgb(15 23 42 / 45%);
+  z-index: 10;
+}
+
+.attachment-cleanup-dialog {
+  min-width: 320px;
+  max-width: 420px;
+  padding: 24px;
+  border-radius: 10px;
+  background-color: var(--surface-raised);
+  box-shadow: 0 18px 40px rgb(15 23 42 / 28%);
+}
+
+.attachment-cleanup-dialog__title {
+  margin: 0 0 12px;
+  font-size: 1.1rem;
+}
+
+.attachment-cleanup-dialog__body {
+  margin: 0 0 20px;
+  color: var(--text-muted);
+}
+
+.attachment-cleanup-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.attachment-cleanup-dialog__actions button {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-sunken);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.attachment-cleanup-dialog__actions button:hover:not(:disabled) {
+  background-color: var(--surface-hover);
+}
+
+.attachment-cleanup-dialog__actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.attachment-cleanup-dialog__confirm {
+  border-color: var(--danger-color, #b91c1c);
+  color: var(--danger-color, #b91c1c);
+}

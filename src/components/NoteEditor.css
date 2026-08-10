@@ -40,7 +40,8 @@
 }
 
 .note-editor__resolve-error,
-.note-editor__save-error {
+.note-editor__save-error,
+.note-editor__attachment-error {
   margin: 0;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border-color);
@@ -68,6 +69,13 @@
 .note-editor__cm-host {
   height: 100%;
   overflow-y: auto;
+}
+
+/* Hover affordance for a native file drag over the editor pane, matching the
+   tree's own move-drag `data-drag-over` convention (spec §11.1, §4). */
+.note-editor__cm-host[data-drag-over] {
+  outline: 2px solid var(--accent-color, currentColor);
+  outline-offset: -2px;
 }
 
 .note-editor__cm-host .cm-editor {

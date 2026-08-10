@@ -1,3 +1,4 @@
+mod attachments;
 mod config;
 mod gitutil;
 mod links;
@@ -16,6 +17,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_window_state::StateFlags;
 
+use attachments::DeletedAttachment;
 use config::{Config, ConfigOutcome, RootDraft, RootValidation};
 use links::ScanLinksResult;
 use notes::OpenNoteResult;
@@ -61,6 +63,18 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
     app.dialog()
         .file()
         .blocking_pick_folder()
+        .map(|file_path| file_path.to_string())
+}
+
+/// Native image-file picker for the toolbar's "Attach image file…" action
+/// (spec §11.1). `dialog:default` already covers this; no new capability
+/// grant is needed.
+#[tauri::command]
+async fn pick_image_file(app: AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+        .blocking_pick_file()
         .map(|file_path| file_path.to_string())
 }
 
@@ -225,6 +239,71 @@ fn scan_links(root_id: String) -> Result<ScanLinksResult, String> {
     Ok(links::scan_links(&root_path))
 }
 
+/// Writes clipboard-pasted image bytes into `.attachments/`, generating the
+/// ULID server-side (mirroring `create_note`). Returns the `attachment:<ULID>`
+/// reference to insert (spec §11.3).
+#[tauri::command]
+fn write_attachment(
+    app: AppHandle,
+    root_id: String,
+    bytes: Vec<u8>,
+    original_name: Option<String>,
+) -> Result<String, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let reference = attachments::write_attachment(&root_path, &bytes, original_name.as_deref())?;
+    trigger_sync_for_root(&app, &root_id, None);
+    Ok(reference)
+}
+
+/// Reads a file server-side from an absolute path, then behaves exactly like
+/// [`write_attachment`] -- a deliberate, narrow exception to the rule that
+/// absolute paths never cross the IPC boundary, shared plumbing between
+/// drag-and-drop and the `text/uri-list` paste case (spec §11.3).
+#[tauri::command]
+fn import_attachment(
+    app: AppHandle,
+    root_id: String,
+    absolute_path: String,
+) -> Result<String, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let reference = attachments::import_attachment(&root_path, Path::new(&absolute_path))?;
+    trigger_sync_for_root(&app, &root_id, None);
+    Ok(reference)
+}
+
+/// Returns raw attachment bytes as a binary IPC response, not a serialized
+/// byte array -- `tauri::ipc::Response` delivers an `ArrayBuffer` to JS via
+/// `InvokeResponseBody::Raw`, avoiding the ~4.4x inflation a JSON number array
+/// would cost on a real image (spec §11.3).
+#[tauri::command]
+fn read_attachment(root_id: String, id: String) -> Result<tauri::ipc::Response, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let bytes = attachments::read_attachment(&root_path, &id)?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Manual cleanup trigger for the Settings dialog (spec §11.6). Shares the
+/// same guards as the background scan -- no more-aggressive mode because a
+/// human asked.
+#[tauri::command]
+fn cleanup_unused_attachments(
+    app: AppHandle,
+    root_id: String,
+    open_buffer_content: Option<String>,
+    dry_run: bool,
+) -> Result<Vec<DeletedAttachment>, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let deleted = attachments::cleanup_unused_attachments(
+        &root_path,
+        open_buffer_content.as_deref(),
+        dry_run,
+    )?;
+    if !dry_run && !deleted.is_empty() {
+        trigger_sync_for_root(&app, &root_id, None);
+    }
+    Ok(deleted)
+}
+
 #[tauri::command]
 fn get_state() -> UiState {
     state::get_state()
@@ -282,6 +361,7 @@ pub fn run() {
             get_config,
             validate_root_path,
             pick_folder,
+            pick_image_file,
             save_config,
             show_config_error,
             list_tree,
@@ -296,6 +376,10 @@ pub fn run() {
             mark_resolved,
             search_notes,
             scan_links,
+            write_attachment,
+            import_attachment,
+            read_attachment,
+            cleanup_unused_attachments,
             get_state,
             save_state,
             check_for_update,

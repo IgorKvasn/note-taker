@@ -9,6 +9,7 @@ export const COMMAND_GET_APP_VERSION = "get_app_version";
 export const COMMAND_GET_CONFIG = "get_config";
 export const COMMAND_VALIDATE_ROOT_PATH = "validate_root_path";
 export const COMMAND_PICK_FOLDER = "pick_folder";
+export const COMMAND_PICK_IMAGE_FILE = "pick_image_file";
 export const COMMAND_SAVE_CONFIG = "save_config";
 export const COMMAND_SHOW_CONFIG_ERROR = "show_config_error";
 export const COMMAND_LIST_TREE = "list_tree";
@@ -20,6 +21,10 @@ export const COMMAND_DELETE_ITEM = "delete_item";
 export const COMMAND_MOVE_ITEM = "move_item";
 export const COMMAND_SEARCH_NOTES = "search_notes";
 export const COMMAND_SCAN_LINKS = "scan_links";
+export const COMMAND_WRITE_ATTACHMENT = "write_attachment";
+export const COMMAND_IMPORT_ATTACHMENT = "import_attachment";
+export const COMMAND_READ_ATTACHMENT = "read_attachment";
+export const COMMAND_CLEANUP_UNUSED_ATTACHMENTS = "cleanup_unused_attachments";
 export const COMMAND_GET_STATE = "get_state";
 export const COMMAND_SAVE_STATE = "save_state";
 export const COMMAND_SYNC_ROOT = "sync_root";
@@ -121,6 +126,12 @@ export interface LinkedNote {
 export interface ScanLinksResult {
   notes: LinkedNote[];
   backlinks: Record<string, string[]>;
+}
+
+/** Mirrors `DeletedAttachment` in `src-tauri/src/attachments.rs`. */
+export interface DeletedAttachment {
+  file_name: string;
+  size_bytes: number;
 }
 
 /** Mirrors `LastOpenNote` in `src-tauri/src/state.rs`. */

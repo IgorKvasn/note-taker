@@ -6,13 +6,13 @@ import { describe, expect, it } from "vitest";
 import { NoteToolbar } from "./NoteToolbar";
 
 describe("NoteToolbar", () => {
-  it("renders all 17 buttons across 5 groups with dividers", () => {
+  it("renders all 17 buttons across 6 groups with dividers", () => {
     const view = new EditorView({ state: EditorState.create({ doc: "hello" }) });
 
     render(<NoteToolbar view={view} />);
 
     expect(screen.getAllByRole("button")).toHaveLength(17);
-    expect(screen.getByTestId("note-toolbar").querySelectorAll(".note-toolbar__group")).toHaveLength(5);
+    expect(screen.getByTestId("note-toolbar").querySelectorAll(".note-toolbar__group")).toHaveLength(6);
 
     view.destroy();
   });
