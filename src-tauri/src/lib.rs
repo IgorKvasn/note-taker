@@ -1,4 +1,5 @@
 mod attachments;
+mod cleanup;
 mod config;
 mod gitutil;
 mod links;
@@ -17,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_window_state::StateFlags;
 
+use cleanup::{CleanupPreview, ReferenceCache};
 use config::{Config, ConfigOutcome, RootDraft, RootValidation};
 use links::ScanLinksResult;
 use notes::OpenNoteResult;
@@ -124,6 +126,8 @@ fn open_note(root_id: String, path: String) -> Result<OpenNoteResult, String> {
 fn save_note(app: AppHandle, root_id: String, path: String, content: String) -> Result<(), String> {
     let note_path = config::resolve_path_in_root(&root_id, &path)?;
     notes::save_note(&note_path, &content)?;
+    app.state::<Arc<ReferenceCache>>()
+        .update_note(&root_id, &path, &content);
     trigger_sync_for_root(&app, &root_id, Some(path));
     Ok(())
 }
@@ -242,6 +246,22 @@ fn run_startup_catchup(app: &AppHandle) {
     }
 }
 
+/// Background attachment cleanup for every configured root, run once at
+/// startup (spec §11.5's "app start" trigger) -- no note is open yet this
+/// early, so there is no live-buffer extra reference source to pass. Spawned
+/// as a background task so a large `.attachments/` listing never blocks the
+/// window from appearing; each root's cleanup failing silently (a missing
+/// root, an unreadable directory) matches `run_startup_catchup`'s own
+/// per-root independence.
+fn run_startup_attachment_cleanup(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        for root in config::all_root_configs() {
+            let _ = cleanup_attachments(app.clone(), root.id, None);
+        }
+    });
+}
+
 /// Stateless: `seq` is not tracked here, only echoed back on every result so
 /// the frontend can discard a response overtaken by a newer request (spec §8).
 /// Infallible by design -- a missing/unreadable root is skipped silently
@@ -309,6 +329,90 @@ fn read_attachment(root_id: String, id: String) -> Result<tauri::ipc::Response, 
     let root_path = config::find_root_path(&root_id)?;
     let bytes = attachments::read_attachment(&root_path, &id)?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Deletes every attachment `cleanup::find_orphaned_attachments` reports for
+/// `root_path`, through `notes::delete_item` so the removal rides the same
+/// sync/commit chain as any other mutation, with no special-cased commit
+/// message. Shared by the silent background path and the manual execute step
+/// -- there is no separate "more aggressive" manual mode.
+fn delete_orphaned_attachments(root_path: &Path, preview: &CleanupPreview) -> Result<(), String> {
+    for attachment in &preview.attachments {
+        notes::delete_item(&root_path.join(&attachment.path))?;
+    }
+    Ok(())
+}
+
+/// Background cleanup (spec §11.5): called on app start and on the first
+/// switch of any note to preview mode this session. Deletes every orphaned
+/// attachment found straight away -- silent by design, no toast, no dialog.
+/// `open_note_content` is the currently-open note's live buffer, `None` when
+/// no note is open.
+#[tauri::command]
+fn cleanup_attachments(
+    app: AppHandle,
+    root_id: String,
+    open_note_content: Option<String>,
+) -> Result<(), String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let cache = app.state::<Arc<ReferenceCache>>();
+    let preview = cleanup::find_orphaned_attachments(
+        &root_id,
+        &root_path,
+        &cache,
+        open_note_content.as_deref(),
+    );
+
+    delete_orphaned_attachments(&root_path, &preview)?;
+    trigger_sync_for_root(&app, &root_id, None);
+    Ok(())
+}
+
+/// The Settings dialog's manual trigger (spec §11.5): reports what would be
+/// deleted -- count and total size -- without deleting anything, sharing the
+/// exact same reference-scan and grace-period guards as background cleanup.
+/// The frontend calls [`execute_attachment_cleanup`] separately after the
+/// user confirms.
+#[tauri::command]
+fn preview_attachment_cleanup(
+    app: AppHandle,
+    root_id: String,
+    open_note_content: Option<String>,
+) -> Result<CleanupPreview, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let cache = app.state::<Arc<ReferenceCache>>();
+    Ok(cleanup::find_orphaned_attachments(
+        &root_id,
+        &root_path,
+        &cache,
+        open_note_content.as_deref(),
+    ))
+}
+
+/// Deletes exactly what a fresh scan (same guards, same cache) currently
+/// reports as orphaned -- re-running the scan rather than trusting a list the
+/// frontend held onto across the confirmation dialog, since an intervening
+/// save could have changed what's actually orphaned in the meantime. Returns
+/// what it deleted so the frontend's completion toast reports accurate
+/// numbers even if they drifted from the preview.
+#[tauri::command]
+fn execute_attachment_cleanup(
+    app: AppHandle,
+    root_id: String,
+    open_note_content: Option<String>,
+) -> Result<CleanupPreview, String> {
+    let root_path = config::find_root_path(&root_id)?;
+    let cache = app.state::<Arc<ReferenceCache>>();
+    let preview = cleanup::find_orphaned_attachments(
+        &root_id,
+        &root_path,
+        &cache,
+        open_note_content.as_deref(),
+    );
+
+    delete_orphaned_attachments(&root_path, &preview)?;
+    trigger_sync_for_root(&app, &root_id, None);
+    Ok(preview)
 }
 
 #[tauri::command]
@@ -386,12 +490,16 @@ pub fn run() {
             write_attachment,
             import_attachment,
             read_attachment,
+            cleanup_attachments,
+            preview_attachment_cleanup,
+            execute_attachment_cleanup,
             get_state,
             save_state,
             check_for_update,
         ])
         .setup(|app| {
             app.manage(Arc::new(SyncManager::new()));
+            app.manage(Arc::new(ReferenceCache::new()));
 
             // The actions live in a submenu rather than directly on the menu root:
             // a root-level item doubles as the menubar button that opens it, so on
@@ -410,6 +518,7 @@ pub fn run() {
             app.on_menu_event(|app, event| handle_menu_event(app, event.id().0.as_str()));
 
             run_startup_catchup(app.handle());
+            run_startup_attachment_cleanup(app.handle());
 
             Ok(())
         })

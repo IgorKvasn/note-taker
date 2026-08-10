@@ -489,6 +489,129 @@ describe("App", () => {
     expect(screen.queryByText("v0.8.0 available")).toBeNull();
   });
 
+  it("triggers attachment cleanup, including the live unsaved buffer, on the first switch of any note to preview mode", async () => {
+    mockInvoke({
+      list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
+      open_note: { content: "![img](attachment:01LIVE)", id: "01NOTE", is_conflicted: false },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+    await screen.findByText("![img](attachment:01LIVE)");
+
+    await userEvent.click(screen.getByRole("button", { name: /preview/i }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("cleanup_attachments", {
+        rootId: EMPTY_CONFIG.roots[0].id,
+        openNoteContent: "![img](attachment:01LIVE)",
+      }),
+    );
+  });
+
+  it("does not re-trigger attachment cleanup on a later preview switch this session", async () => {
+    mockInvoke({
+      list_tree: [
+        { name: "first.md", path: "first.md", is_directory: false, children: [] },
+        { name: "second.md", path: "second.md", is_directory: false, children: [] },
+      ],
+      open_note: (args?: { path: string }) =>
+        Promise.resolve({ content: `content of ${args!.path}`, id: "01NOTE", is_conflicted: false }),
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await userEvent.click(await screen.findByRole("button", { name: "first.md" }));
+    await screen.findByText("content of first.md");
+    await userEvent.click(screen.getByRole("button", { name: /preview/i }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("cleanup_attachments", expect.anything()));
+    const callCountAfterFirst = invoke.mock.calls.filter(([command]) => command === "cleanup_attachments").length;
+
+    await userEvent.click(screen.getByRole("button", { name: /edit/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "second.md" }));
+    await screen.findByText("content of second.md");
+    await userEvent.click(screen.getByRole("button", { name: /preview/i }));
+
+    const callCountAfterSecond = invoke.mock.calls.filter(([command]) => command === "cleanup_attachments").length;
+    expect(callCountAfterSecond).toBe(callCountAfterFirst);
+  });
+
+  it("shows a confirmation dialog with an accurate count and size before deleting from the Settings button", async () => {
+    mockInvoke({
+      list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
+      open_note: { content: "no attachments here", id: "01NOTE", is_conflicted: false },
+      preview_attachment_cleanup: { attachments: [{ path: ".attachments/01OLD-x.png", size: 2048 }], total_size: 2048 },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+    await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+    await screen.findByText("no attachments here");
+
+    await emitEvent(EVENT_MENU_SETTINGS);
+    await userEvent.click(await screen.findByRole("button", { name: "Clean up unused attachments" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Clean up unused attachments?" });
+    expect(within(dialog).getByText(/1 unused attachment/)).toBeDefined();
+    expect(within(dialog).getByText(/2\.0 KB/)).toBeDefined();
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("preview_attachment_cleanup", {
+        rootId: EMPTY_CONFIG.roots[0].id,
+        openNoteContent: "no attachments here",
+      }),
+    );
+    expect(invoke).not.toHaveBeenCalledWith("execute_attachment_cleanup", expect.anything());
+  });
+
+  it("deletes and shows a completion toast when the cleanup confirmation is confirmed", async () => {
+    mockInvoke({
+      list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
+      open_note: { content: "no attachments here", id: "01NOTE", is_conflicted: false },
+      preview_attachment_cleanup: { attachments: [{ path: ".attachments/01OLD-x.png", size: 2048 }], total_size: 2048 },
+      execute_attachment_cleanup: { attachments: [{ path: ".attachments/01OLD-x.png", size: 2048 }], total_size: 2048 },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+    await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+    await screen.findByText("no attachments here");
+
+    await emitEvent(EVENT_MENU_SETTINGS);
+    await userEvent.click(await screen.findByRole("button", { name: "Clean up unused attachments" }));
+    await screen.findByRole("dialog", { name: "Clean up unused attachments?" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("execute_attachment_cleanup", {
+        rootId: EMPTY_CONFIG.roots[0].id,
+        openNoteContent: "no attachments here",
+      }),
+    );
+    expect(await screen.findByText(/Deleted 1 unused attachment/)).toBeDefined();
+    expect(screen.queryByRole("dialog", { name: "Clean up unused attachments?" })).toBeNull();
+  });
+
+  it("cancelling the cleanup confirmation deletes nothing", async () => {
+    mockInvoke({
+      list_tree: [{ name: "note.md", path: "note.md", is_directory: false, children: [] }],
+      open_note: { content: "no attachments here", id: "01NOTE", is_conflicted: false },
+      preview_attachment_cleanup: { attachments: [{ path: ".attachments/01OLD-x.png", size: 2048 }], total_size: 2048 },
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+    await userEvent.click(await screen.findByRole("button", { name: "note.md" }));
+    await screen.findByText("no attachments here");
+
+    await emitEvent(EVENT_MENU_SETTINGS);
+    await userEvent.click(await screen.findByRole("button", { name: "Clean up unused attachments" }));
+    const dialog = await screen.findByRole("dialog", { name: "Clean up unused attachments?" });
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog", { name: "Clean up unused attachments?" })).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("execute_attachment_cleanup", expect.anything());
+  });
+
   it("stacks the update notice above the local-only notice when both are showing", async () => {
     mockInvoke({
       check_for_update: [{ version: "v0.7.0", notes: "notes", url: "https://example.com/v0.7.0" }],

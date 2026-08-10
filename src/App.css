@@ -69,3 +69,23 @@
   background-color: var(--surface-raised);
   box-shadow: 0 18px 40px rgb(15 23 42 / 28%);
 }
+
+.settings-dialog__cleanup {
+  margin-top: 20px;
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-sunken);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-dialog__cleanup:hover:not(:disabled) {
+  background-color: var(--surface-hover);
+}
+
+.settings-dialog__cleanup:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

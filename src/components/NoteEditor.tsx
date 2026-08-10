@@ -322,6 +322,15 @@ interface NoteEditorProps {
    * every note switch, so a cache living here would refetch on every switch.
    */
   resolveAttachment?: (id: string) => string | null | undefined;
+  /**
+   * Reports the live buffer's content on every change, including content not
+   * yet flushed to disk -- attachment cleanup (issue #79) reads this so a
+   * reference existing only in an unsaved buffer isn't treated as orphaned.
+   */
+  onContentChange?: (content: string) => void;
+  /** Called once the first time this note switches to preview mode -- attachment
+   * cleanup (issue #79) is triggered on the first preview-switch of any note. */
+  onFirstPreview?: () => void;
 }
 
 /**
@@ -339,6 +348,8 @@ export function NoteEditor({
   scrollToOffset,
   onOpenNoteLink,
   resolveAttachment,
+  onContentChange,
+  onFirstPreview,
 }: NoteEditorProps) {
   const { linkableNotes, resolveNoteLink, getBacklinks } = useNoteLinks(rootId);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -506,6 +517,15 @@ export function NoteEditor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootId, path]);
+
+  // Reports the live buffer on every change (initial load, local edits, and
+  // remote refreshes alike) -- attachment cleanup (issue #79) reads this as
+  // an extra reference source so a reference only in an unsaved buffer isn't
+  // treated as orphaned.
+  useEffect(() => {
+    onContentChange?.(content);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content]);
 
   // Re-applies on every `scrollToOffset` change while the note stays open (a
   // repeat click on a search result for the already-open note), not just on
@@ -693,7 +713,12 @@ export function NoteEditor({
         <button
           type="button"
           className="note-editor__mode-toggle"
-          onClick={() => onModeChange(mode === "edit" ? "view" : "edit")}
+          onClick={() => {
+            if (mode === "edit") {
+              onFirstPreview?.();
+            }
+            onModeChange(mode === "edit" ? "view" : "edit");
+          }}
         >
           {mode === "edit" ? "Preview" : "Edit"}
         </button>

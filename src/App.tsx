@@ -3,24 +3,31 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AboutModal } from "./components/AboutModal";
 import { ChangelogModal } from "./components/ChangelogModal";
+import { CleanupConfirmDialog } from "./components/CleanupConfirmDialog";
 import { LocalOnlyNotice } from "./components/LocalOnlyNotice";
 import { NoticeStack } from "./components/NoticeStack";
 import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { Spinner } from "./components/Spinner";
 import { SplitPane } from "./components/SplitPane";
+import { Toast } from "./components/Toast";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { useAttachmentResolver } from "./hooks/useAttachmentResolver";
+import { useToasts } from "./hooks/useToasts";
 import { useUiState } from "./hooks/useUiState";
 import { isDescendantPath } from "./paths";
 import {
   COMMAND_CHECK_FOR_UPDATE,
+  COMMAND_CLEANUP_ATTACHMENTS,
+  COMMAND_EXECUTE_ATTACHMENT_CLEANUP,
   COMMAND_GET_APP_VERSION,
   COMMAND_GET_CONFIG,
+  COMMAND_PREVIEW_ATTACHMENT_CLEANUP,
   COMMAND_SHOW_CONFIG_ERROR,
   EVENT_MENU_ABOUT,
   EVENT_MENU_SETTINGS,
   EVENT_SYNC_STATUS,
+  type CleanupPreview,
   type Config,
   type ConfigOutcome,
   type ReleaseInfo,
@@ -57,6 +64,34 @@ export function App() {
   const [availableUpdates, setAvailableUpdates] = useState<ReleaseInfo[]>([]);
   const [isUpdateNoticeDismissed, setIsUpdateNoticeDismissed] = useState(false);
   const [isChangelogOpen, setIsChangelogOpen] = useState(false);
+  // The open note's live (possibly unsaved) buffer content -- an extra
+  // reference source for attachment cleanup (issue #79), so a reference that
+  // exists only in an unsaved buffer isn't treated as orphaned. Read via a ref
+  // (not state) since it's only ever read from event handlers/callbacks, never
+  // rendered, and updates on every keystroke.
+  const openNoteContentRef = useRef<string | null>(null);
+  const handleContentChange = useCallback((content: string) => {
+    openNoteContentRef.current = content;
+  }, []);
+  // Attachment cleanup (issue #79) runs once per session on the first switch
+  // of any note to preview mode -- this ref (not state) tracks whether that's
+  // already happened, since re-triggering on every later preview switch isn't
+  // wanted and a ref avoids an extra render on the one time it flips.
+  const hasCleanedUpThisSessionRef = useRef(false);
+  const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null);
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
+  const { toasts, showToast } = useToasts();
+
+  const triggerCleanupOnce = useCallback((rootId: string) => {
+    if (hasCleanedUpThisSessionRef.current) {
+      return;
+    }
+    hasCleanedUpThisSessionRef.current = true;
+    invoke(COMMAND_CLEANUP_ATTACHMENTS, {
+      rootId,
+      openNoteContent: openNoteContentRef.current,
+    }).catch(() => {});
+  }, []);
 
   const openNoteHandler = useCallback(
     (rootId: string, path: string, scrollToOffset?: number) => {
@@ -179,6 +214,49 @@ export function App() {
   const closeAbout = useCallback(() => setIsAboutOpen(false), []);
   const closeSettings = useCallback(() => setIsSettingsOpen(false), []);
 
+  /**
+   * Settings dialog's manual cleanup trigger (issue #79): fetches a preview
+   * (count + total size) before deleting anything -- the confirmation
+   * dialog below reports that, and only calls `execute_attachment_cleanup`
+   * once the user confirms.
+   */
+  const startCleanup = useCallback(() => {
+    if (openNote === null) {
+      return;
+    }
+    setIsCleaningUp(true);
+    invoke<CleanupPreview>(COMMAND_PREVIEW_ATTACHMENT_CLEANUP, {
+      rootId: openNote.rootId,
+      openNoteContent: openNoteContentRef.current,
+    })
+      .then(setCleanupPreview)
+      .catch(() => setCleanupPreview({ attachments: [], total_size: 0 }))
+      .finally(() => setIsCleaningUp(false));
+  }, [openNote]);
+
+  const cancelCleanup = useCallback(() => setCleanupPreview(null), []);
+
+  const confirmCleanup = useCallback(() => {
+    if (openNote === null) {
+      setCleanupPreview(null);
+      return;
+    }
+    setIsCleaningUp(true);
+    invoke<CleanupPreview>(COMMAND_EXECUTE_ATTACHMENT_CLEANUP, {
+      rootId: openNote.rootId,
+      openNoteContent: openNoteContentRef.current,
+    })
+      .then((result) => {
+        const count = result.attachments.length;
+        showToast(count === 0 ? "No unused attachments to clean up." : `Deleted ${count} unused attachment${count === 1 ? "" : "s"}.`);
+      })
+      .catch(() => showToast("Attachment cleanup failed."))
+      .finally(() => {
+        setIsCleaningUp(false);
+        setCleanupPreview(null);
+      });
+  }, [openNote, showToast]);
+
   const handleConfigSaved = useCallback((config: Config) => {
     setConfigOutcome({ type: "ok", config });
     setIsSettingsOpen(false);
@@ -255,6 +333,8 @@ export function App() {
                 scrollToOffset={openNote.scrollToOffset}
                 onOpenNoteLink={openNoteHandler}
                 resolveAttachment={resolveAttachment}
+                onContentChange={handleContentChange}
+                onFirstPreview={() => triggerCleanupOnce(openNote.rootId)}
               />
             </Suspense>
           )
@@ -272,8 +352,24 @@ export function App() {
               onSaved={handleConfigSaved}
               onCancel={closeSettings}
             />
+            <button
+              type="button"
+              className="settings-dialog__cleanup"
+              onClick={startCleanup}
+              disabled={openNote === null || isCleaningUp}
+            >
+              Clean up unused attachments
+            </button>
           </div>
         </div>
+      )}
+      {cleanupPreview !== null && (
+        <CleanupConfirmDialog
+          fileCount={cleanupPreview.attachments.length}
+          totalSize={cleanupPreview.total_size}
+          onConfirm={confirmCleanup}
+          onCancel={cancelCleanup}
+        />
       )}
       <NoticeStack>
         {showLocalOnlyNotice && <LocalOnlyNotice onDismiss={dismissNotice} />}
@@ -285,6 +381,7 @@ export function App() {
           />
         )}
       </NoticeStack>
+      <Toast toasts={toasts} />
     </div>
   );
 }

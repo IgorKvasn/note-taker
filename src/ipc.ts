@@ -30,6 +30,9 @@ export const COMMAND_PICK_IMAGE_FILE = "pick_image_file";
 export const COMMAND_WRITE_ATTACHMENT = "write_attachment";
 export const COMMAND_IMPORT_ATTACHMENT = "import_attachment";
 export const COMMAND_READ_ATTACHMENT = "read_attachment";
+export const COMMAND_CLEANUP_ATTACHMENTS = "cleanup_attachments";
+export const COMMAND_PREVIEW_ATTACHMENT_CLEANUP = "preview_attachment_cleanup";
+export const COMMAND_EXECUTE_ATTACHMENT_CLEANUP = "execute_attachment_cleanup";
 
 /** Emitted by the backend git sync chain (spec §7); one-way, never invoked. */
 export const EVENT_SYNC_STATUS = "sync-status";
@@ -186,4 +189,20 @@ export interface ReleaseInfo {
 export interface PickedFile {
   name: string;
   bytes: number[];
+}
+
+/** Mirrors `OrphanedAttachment` in `src-tauri/src/cleanup.rs`. */
+export interface OrphanedAttachment {
+  path: string;
+  size: number;
+}
+
+/**
+ * Mirrors `CleanupPreview` in `src-tauri/src/cleanup.rs`, returned by both
+ * `preview_attachment_cleanup` (what would be deleted) and
+ * `execute_attachment_cleanup` (what was actually deleted).
+ */
+export interface CleanupPreview {
+  attachments: OrphanedAttachment[];
+  total_size: number;
 }
