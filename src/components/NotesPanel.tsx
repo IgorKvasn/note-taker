@@ -11,7 +11,7 @@ import {
   type TreeNode,
 } from "../ipc";
 import { useSearch } from "../hooks/useSearch";
-import { isDescendantPath } from "../paths";
+import { isDescendantPath, rootLabel } from "../paths";
 import { countContents } from "./countContents";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { InlineCreateField, type CreateKind } from "./InlineCreateField";
@@ -56,12 +56,6 @@ interface Selection {
   rootId: string;
   path: string;
   isDirectory: boolean;
-}
-
-function rootLabel(root: RootConfig): string {
-  const normalized = root.path.replace(/\/+$/, "");
-  const lastSegment = normalized.split("/").pop();
-  return lastSegment && lastSegment.length > 0 ? lastSegment : root.path;
 }
 
 function isSameSelection(a: Selection | null, b: Pick<Selection, "rootId" | "path">): boolean {
