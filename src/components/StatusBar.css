@@ -19,3 +19,12 @@
   direction: rtl;
   text-align: left;
 }
+
+.status-bar__save-state {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.status-bar__save-state--failed {
+  color: var(--danger-color, #d94a4a);
+}

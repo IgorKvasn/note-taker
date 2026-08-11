@@ -338,6 +338,15 @@ interface NoteEditorProps {
    * flush itself lives here, next to the debounce state it flushes.
    */
   onFlushPendingSaveChange?: (flush: (() => Promise<void>) | null) => void;
+  /**
+   * Reports transitions between the three states of the autosave chain
+   * (issue #96), for the status bar's compact indicator -- a sibling of this
+   * component, not a parent, so the state must be lifted up rather than
+   * rendered here. Fired only on transitions, never per keystroke, so an
+   * edit burst re-renders the caller a few times rather than once per
+   * character.
+   */
+  onSaveStateChange?: (state: "clean" | "pending" | "failed") => void;
 }
 
 /**
@@ -358,6 +367,7 @@ export function NoteEditor({
   onContentChange,
   onFirstPreview,
   onFlushPendingSaveChange,
+  onSaveStateChange,
 }: NoteEditorProps) {
   const { linkableNotes, resolveNoteLink, getBacklinks } = useNoteLinks(rootId);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -370,6 +380,11 @@ export function NoteEditor({
   const scrollToOffsetRef = useRef(scrollToOffset);
   scrollToOffsetRef.current = scrollToOffset;
   const pendingSaveRef = useRef<{ rootId: string; path: string; content: string } | null>(null);
+  // Tracks the last save state reported via `onSaveStateChange`, so the
+  // callback fires only on transitions (issue #96) rather than once per
+  // keystroke -- the debounce-armed call site below re-arms the timeout on
+  // every keystroke, but must only report "pending" the first time.
+  const lastReportedSaveStateRef = useRef<"clean" | "pending" | "failed">("clean");
   // Set true by the mount effect's cleanup below; checked both there (as
   // `isCancelled`, its own closure copy) and inside `flushPendingSave`'s retry
   // `.catch`, which runs outside that effect and so needs this ref -- a plain
@@ -401,6 +416,18 @@ export function NoteEditor({
   // mid-write would otherwise fire a second file dialog on top of the first.
   const [isAttaching, setIsAttaching] = useState(false);
 
+  /** Reports a save-state transition to the caller, but only if it's an
+   * actual change from the last one reported -- the debounce-armed call site
+   * re-arms on every keystroke, so without this check "pending" would fire
+   * once per character instead of once per edit burst. */
+  const reportSaveState = (state: "clean" | "pending" | "failed") => {
+    if (lastReportedSaveStateRef.current === state) {
+      return;
+    }
+    lastReportedSaveStateRef.current = state;
+    onSaveStateChange?.(state);
+  };
+
   /** Returns a promise that resolves once any pending autosave has been sent
    * (and settled) -- callers that need the disk write to land first (e.g.
    * mark_resolved reading the file back) must await it; unmount cleanup fires
@@ -426,6 +453,7 @@ export function NoteEditor({
       .then(() => {
         if (!isUnmountedRef.current) {
           setSaveError(null);
+          reportSaveState("clean");
         }
       })
       .catch((error: unknown) => {
@@ -437,6 +465,7 @@ export function NoteEditor({
           saveTimeoutRef.current = setTimeout(flushPendingSave, SAVE_RETRY_MS);
         }
         setSaveError(error instanceof Error ? error.message : String(error));
+        reportSaveState("failed");
       });
   };
 
@@ -479,6 +508,7 @@ export function NoteEditor({
             const updatedContent = update.state.doc.toString();
             setContent(updatedContent);
             pendingSaveRef.current = { rootId, path, content: updatedContent };
+            reportSaveState("pending");
             if (saveTimeoutRef.current !== null) {
               clearTimeout(saveTimeoutRef.current);
             }

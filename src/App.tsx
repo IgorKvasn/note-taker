@@ -74,6 +74,9 @@ export function App() {
   const handleContentChange = useCallback((content: string) => {
     openNoteContentRef.current = content;
   }, []);
+  const handleSaveStateChange = useCallback((state: "clean" | "pending" | "failed") => {
+    setSaveState(state);
+  }, []);
   // The open note's flushPendingSave, if any -- a manual sync (issue #92)
   // must flush an in-flight autosave debounce before syncing, but that
   // function lives inside NoteEditor, which is only mounted when a note from
@@ -83,6 +86,11 @@ export function App() {
   const handleFlushPendingSaveChange = useCallback((flush: (() => Promise<void>) | null) => {
     flushOpenNoteSaveRef.current = flush;
   }, []);
+  // The open note's autosave state (issue #96), for the status bar's compact
+  // indicator -- lives here rather than in NoteEditor since StatusBar is a
+  // sibling of it, not a child. Reset on note switch below, next to the
+  // `openNoteKey` effect that drives it.
+  const [saveState, setSaveState] = useState<"clean" | "pending" | "failed">("clean");
   // Flushes the open note's pending autosave only if it belongs to `rootId` --
   // a manual sync on a root with no open note (or a different root's note
   // open) has nothing to flush.
@@ -168,6 +176,19 @@ export function App() {
       .then((releases) => setAvailableUpdates(releases ?? []))
       .catch(() => setAvailableUpdates([]));
   }, []);
+
+  // Resets the save-state indicator whenever the open note's identity
+  // changes (issue #96) -- mirrors NoteEditor's own `key` below exactly, so
+  // this resets in lockstep with every NoteEditor remount (a real note
+  // switch, or a rename/move of the open note that changes its path) and
+  // never resets when NoteEditor itself doesn't remount (e.g. the
+  // scroll-to-offset-only update from clicking a search result again).
+  // Without this, a `failed` state from the previous note would otherwise
+  // leak onto whatever note the user opens next.
+  const openNoteKey = openNote !== null ? `${openNote.rootId}:${openNote.path}` : null;
+  useEffect(() => {
+    setSaveState("clean");
+  }, [openNoteKey]);
 
   // Restores the last-open note once both the config and persisted UI state have
   // loaded. A note whose root no longer exists in the current config (e.g. the
@@ -357,12 +378,13 @@ export function App() {
                 onContentChange={handleContentChange}
                 onFirstPreview={() => triggerCleanupOnce(openNote.rootId)}
                 onFlushPendingSaveChange={handleFlushPendingSaveChange}
+                onSaveStateChange={handleSaveStateChange}
               />
             </Suspense>
           )
         }
       />
-      <StatusBar root={openNoteRoot} path={openNote?.path ?? null} />
+      <StatusBar root={openNoteRoot} path={openNote?.path ?? null} saveState={saveState} />
       <AboutModal isOpen={isAboutOpen} version={version} onClose={closeAbout} />
       <ChangelogModal isOpen={isChangelogOpen} releases={availableUpdates} onClose={closeChangelog} />
       {isSettingsOpen && (
