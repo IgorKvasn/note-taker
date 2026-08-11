@@ -71,8 +71,12 @@ export function App() {
   // (not state) since it's only ever read from event handlers/callbacks, never
   // rendered, and updates on every keystroke.
   const openNoteContentRef = useRef<string | null>(null);
+  // Mirrors openNoteContentRef in state so the status bar's word count can
+  // re-render live as the user types.
+  const [openNoteContent, setOpenNoteContent] = useState<string | null>(null);
   const handleContentChange = useCallback((content: string) => {
     openNoteContentRef.current = content;
+    setOpenNoteContent(content);
   }, []);
   // The open note's flushPendingSave, if any -- a manual sync (issue #92)
   // must flush an in-flight autosave debounce before syncing, but that
@@ -362,7 +366,7 @@ export function App() {
           )
         }
       />
-      <StatusBar root={openNoteRoot} path={openNote?.path ?? null} />
+      <StatusBar root={openNoteRoot} path={openNote?.path ?? null} content={openNote !== null ? openNoteContent : null} />
       <AboutModal isOpen={isAboutOpen} version={version} onClose={closeAbout} />
       <ChangelogModal isOpen={isChangelogOpen} releases={availableUpdates} onClose={closeChangelog} />
       {isSettingsOpen && (
