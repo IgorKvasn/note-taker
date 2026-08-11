@@ -19,3 +19,8 @@
   direction: rtl;
   text-align: left;
 }
+
+.status-bar__wordcount {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
