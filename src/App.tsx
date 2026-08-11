@@ -10,6 +10,7 @@ import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { Spinner } from "./components/Spinner";
 import { SplitPane } from "./components/SplitPane";
+import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { useAttachmentResolver } from "./hooks/useAttachmentResolver";
@@ -278,6 +279,9 @@ export function App() {
     setIsSettingsOpen(false);
   }, []);
 
+  const openNoteRoot =
+    openNote !== null ? (configOutcome?.type === "ok" ? configOutcome.config.roots.find((root) => root.id === openNote.rootId) ?? null : null) : null;
+
   if (configOutcome === null) {
     return (
       <div className="app app--boot">
@@ -358,6 +362,7 @@ export function App() {
           )
         }
       />
+      <StatusBar root={openNoteRoot} path={openNote?.path ?? null} />
       <AboutModal isOpen={isAboutOpen} version={version} onClose={closeAbout} />
       <ChangelogModal isOpen={isChangelogOpen} releases={availableUpdates} onClose={closeChangelog} />
       {isSettingsOpen && (

@@ -139,6 +139,15 @@ describe("App", () => {
     expect(screen.queryByText(/sync/i)).toBeNull();
   });
 
+  it("renders the status bar with blank segments when no note is open", async () => {
+    const { container } = render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    const statusBar = container.querySelector(".status-bar");
+    expect(statusBar).not.toBeNull();
+    expect(container.querySelector(".status-bar__location")?.textContent).toBe("");
+  });
+
   it("shows first-run setup and blocks the two-pane layout when config is missing", async () => {
     mockInvoke({ get_config: { type: "missing" } satisfies ConfigOutcome });
     render(<App />);

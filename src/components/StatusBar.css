@@ -1,0 +1,21 @@
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border-color);
+  background-color: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.status-bar__location {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
