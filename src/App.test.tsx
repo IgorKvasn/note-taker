@@ -307,6 +307,44 @@ describe("App", () => {
     expect(screen.queryAllByTestId("note-editor")).toHaveLength(1);
   });
 
+  it("does not leak a failed save-state marker from one note onto the next (issue #96)", async () => {
+    invoke.mockImplementation((command: string, args?: { path: string }) => {
+      if (command === "list_tree") {
+        return Promise.resolve([
+          { name: "first.md", path: "first.md", is_directory: false, children: [] },
+          { name: "second.md", path: "second.md", is_directory: false, children: [] },
+        ]);
+      }
+      if (command === "open_note") {
+        return Promise.resolve({ content: `content of ${args!.path}`, id: "01NOTE", is_conflicted: false });
+      }
+      if (command === "save_note") {
+        return Promise.reject(new Error("permission denied"));
+      }
+      if (command === "get_app_version") return Promise.resolve("0.1.0");
+      if (command === "get_config") return Promise.resolve({ type: "ok", config: EMPTY_CONFIG } satisfies ConfigOutcome);
+      if (command === "check_for_update") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    render(<App />);
+    await screen.findByTestId("split-pane-left");
+
+    await userEvent.click(await screen.findByRole("button", { name: "first.md" }));
+    await screen.findByText("content of first.md");
+
+    const editable = within(await screen.findByTestId("note-editor")).getByRole("textbox");
+    await userEvent.click(editable);
+    await userEvent.keyboard(" edited");
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveProperty("textContent", "Save failed"));
+
+    await userEvent.click(await screen.findByRole("button", { name: "second.md" }));
+    await screen.findByText("content of second.md");
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Save failed")).toBeNull();
+  });
+
   it("keeps preview mode active after switching to a different note, and persists the setting (issue #37)", async () => {
     mockInvoke({
       list_tree: [

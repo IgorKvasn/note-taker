@@ -24,3 +24,12 @@
   flex-shrink: 0;
   white-space: nowrap;
 }
+
+.status-bar__save-state {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.status-bar__save-state--failed {
+  color: var(--danger-color);
+}

@@ -145,6 +145,54 @@ describe("NoteEditor", () => {
     );
   });
 
+  describe("onSaveStateChange (issue #96)", () => {
+    it("reports pending on the first keystroke of an edit burst, then clean once the debounced save resolves", async () => {
+      const user = userEvent.setup();
+      const onSaveStateChange = vi.fn();
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" onSaveStateChange={onSaveStateChange} />);
+      await screen.findByText("Loaded");
+
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard(" edited");
+
+      expect(onSaveStateChange).toHaveBeenCalledWith("pending");
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_note", expect.anything()), { timeout: 2000 });
+      await waitFor(() => expect(onSaveStateChange).toHaveBeenLastCalledWith("clean"));
+
+      // Transitions only -- one "pending" call per burst, not once per
+      // keystroke (" edited" is 7 keystrokes), and exactly one "clean" call
+      // once the save resolves.
+      expect(onSaveStateChange.mock.calls.filter(([state]) => state === "pending")).toHaveLength(1);
+      expect(onSaveStateChange.mock.calls.filter(([state]) => state === "clean")).toHaveLength(1);
+    });
+
+    it("reports failed when an autosave fails, and clean again once a retry succeeds", async () => {
+      const user = userEvent.setup();
+      const onSaveStateChange = vi.fn();
+      invoke.mockImplementation((command: string) => {
+        if (command === "open_note") {
+          return Promise.resolve({ content: "Loaded\n", id: "01LOADED", is_conflicted: false });
+        }
+        if (command === "save_note") {
+          return Promise.reject(new Error("permission denied"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<ControlledNoteEditor rootId="01ROOT" path="note.md" onSaveStateChange={onSaveStateChange} />);
+      await screen.findByText("Loaded");
+
+      const editable = await screen.findByRole("textbox");
+      await user.click(editable);
+      await user.keyboard(" edited");
+
+      await waitFor(() => expect(onSaveStateChange).toHaveBeenLastCalledWith("failed"));
+    });
+  });
+
   it("flushes a pending save for the previous note before switching to a new one", async () => {
     const user = userEvent.setup();
 
