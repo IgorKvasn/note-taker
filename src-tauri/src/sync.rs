@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -94,6 +94,17 @@ struct RootSyncSlot {
     /// countdown and this stale task simply exits, giving trailing-only
     /// debounce without ever cancelling the sleeping task itself.
     delay_generation: AtomicU64,
+    /// `true` from the moment [`trigger_sync_delayed`] arms a countdown until
+    /// the task that ends up winning it (the one whose captured generation
+    /// still matches when it wakes) hands off to [`trigger_sync`]. A rearm
+    /// bumps `delay_generation` but leaves this `true` throughout, since the
+    /// countdown is still in progress, just restarted -- only the eventual
+    /// firing (or this process never having armed one at all) means `false`.
+    /// Read by [`SyncManager::rearm_delay`] (issue #87) to decide whether a
+    /// changed `sync_debounce_secs` should rearm this root's countdown at all:
+    /// a root with nothing in flight must not have a countdown started for it
+    /// just because its configured delay changed.
+    delay_pending: AtomicBool,
 }
 
 impl SyncManager {
@@ -198,6 +209,7 @@ pub fn trigger_sync_delayed(
     }
 
     let generation = slot.delay_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    slot.delay_pending.store(true, Ordering::SeqCst);
     let delay = Duration::from_secs(root.sync_debounce_secs as u64);
 
     tauri::async_runtime::spawn(async move {
@@ -209,8 +221,33 @@ pub fn trigger_sync_delayed(
             return;
         }
 
+        slot.delay_pending.store(false, Ordering::SeqCst);
         trigger_sync(app, manager, root, None);
     });
+}
+
+impl SyncManager {
+    /// Rearms `root`'s countdown to `root.sync_debounce_secs` if -- and only
+    /// if -- this root already has one in progress (issue #87: "Saving
+    /// Settings with a changed delay rearms a countdown already in progress
+    /// for that root to the new value"). A root with nothing in flight is
+    /// left entirely alone: unconditionally calling [`trigger_sync_delayed`]
+    /// here would arm a fresh countdown (and the spurious `Syncing`/`Synced`
+    /// status events that come with it) for a root that had no pending save
+    /// to begin with, which the sibling acceptance criteria ("a root with no
+    /// delay in progress is unaffected") rule out.
+    pub fn rearm_delay(app: AppHandle, manager: Arc<SyncManager>, root: RootConfig) {
+        let slot = manager.slot_for(&root.id);
+        if !slot.delay_pending.load(Ordering::SeqCst) {
+            return;
+        }
+
+        // `origin_path: None` -- rearming carries no new save of its own; the
+        // origin paths already queued by the countdown being rearmed stay in
+        // `next_origin_paths` untouched, so the eventual run still attributes
+        // to whichever save(s) armed it.
+        trigger_sync_delayed(app, manager, root, None);
+    }
 }
 
 /// Startup catchup (issue #25): reactive-only sync leaves an interrupted push
@@ -1648,5 +1685,146 @@ mod tests {
 
         let a_committed = wait_until(Duration::from_secs(5), || commit_count(dir_a.path()) == 1);
         assert!(a_committed, "expected root A to eventually commit too");
+    }
+
+    /// Issue #87's core case: Settings is saved with a changed delay while a
+    /// countdown for that root is already in progress. `rearm_delay` must
+    /// restart it at the new duration -- if it didn't, the chain would run at
+    /// ~1s (the original delay); since it does, the commit must land only
+    /// once the new, longer deadline is reached, and it must still eventually
+    /// fire rather than being dropped.
+    #[test]
+    fn rearm_delay_restarts_a_live_countdown_at_the_new_deadline() {
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        write_and_stage(dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let original_root = root_config("root-1", dir.path(), 1);
+
+        let start = std::time::Instant::now();
+        trigger_sync_delayed(
+            app.clone(),
+            manager.clone(),
+            original_root,
+            Some("note.md".to_string()),
+        );
+
+        // Rearm to a longer delay well before the original 1s deadline.
+        let rearmed_root = root_config("root-1", dir.path(), 3);
+        SyncManager::rearm_delay(app, manager, rearmed_root);
+
+        thread::sleep(Duration::from_millis(1400));
+        assert_eq!(
+            commit_count(dir.path()),
+            0,
+            "the original 1s deadline must not have fired the chain -- rearming \
+             must have superseded it"
+        );
+
+        let committed = wait_until(Duration::from_secs(5), || commit_count(dir.path()) == 1);
+        assert!(
+            committed,
+            "the rearmed countdown must still run to completion, committing the \
+             pending save rather than dropping it"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(2800),
+            "the chain must not have run before the new, longer delay elapsed"
+        );
+    }
+
+    /// A root with no countdown in progress must be left entirely alone by a
+    /// Settings save -- `rearm_delay` must not arm a fresh countdown (and the
+    /// spurious sync it would eventually trigger) for a root with nothing
+    /// pending.
+    #[test]
+    fn rearm_delay_does_nothing_when_no_countdown_is_in_progress() {
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        write_and_stage(dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = root_config("root-1", dir.path(), 1);
+
+        SyncManager::rearm_delay(app, manager, root);
+
+        thread::sleep(Duration::from_millis(1500));
+        assert_eq!(
+            commit_count(dir.path()),
+            0,
+            "rearm_delay must not arm a countdown for a root with nothing pending"
+        );
+    }
+
+    /// Once a delayed countdown has fired and cleared itself, a later
+    /// `rearm_delay` call for that root (e.g. a second, unrelated Settings
+    /// save) must not resurrect it -- there is no pending save left to rearm.
+    #[test]
+    fn rearm_delay_does_nothing_after_a_countdown_has_already_fired() {
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        write_and_stage(dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = root_config("root-1", dir.path(), 0);
+
+        trigger_sync_delayed(app.clone(), manager.clone(), root.clone(), None);
+        let committed = wait_until(Duration::from_secs(5), || commit_count(dir.path()) == 1);
+        assert!(committed, "expected the original countdown to fire first");
+
+        SyncManager::rearm_delay(app, manager, root);
+
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            commit_count(dir.path()),
+            1,
+            "rearm_delay must not start a new run once the prior countdown already fired"
+        );
+    }
+
+    /// Rearming one root's countdown must not disturb a live countdown on a
+    /// different root.
+    #[test]
+    fn rearm_delay_does_not_disturb_a_different_roots_countdown() {
+        let dir_a = TempDir::new().unwrap();
+        init_repo(dir_a.path());
+        write_and_stage(dir_a.path(), "note.md", "hello\n");
+
+        let dir_b = TempDir::new().unwrap();
+        init_repo(dir_b.path());
+        write_and_stage(dir_b.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+
+        trigger_sync_delayed(
+            app.clone(),
+            manager.clone(),
+            root_config("root-a", dir_a.path(), 1),
+            None,
+        );
+
+        // Rearm root B, which has no countdown in progress -- must have no
+        // effect on it, and in particular must not touch root A's slot.
+        SyncManager::rearm_delay(
+            app.clone(),
+            manager.clone(),
+            root_config("root-b", dir_b.path(), 3),
+        );
+
+        let a_committed = wait_until(Duration::from_secs(5), || commit_count(dir_a.path()) == 1);
+        assert!(
+            a_committed,
+            "root A's countdown must still fire on its own, undisturbed schedule"
+        );
+        assert_eq!(
+            commit_count(dir_b.path()),
+            0,
+            "root B had no countdown in progress -- rearm_delay must not have armed one"
+        );
     }
 }

@@ -104,9 +104,35 @@ async fn pick_image_file(app: AppHandle) -> Result<Option<PickedFile>, String> {
     Ok(Some(PickedFile { name, bytes }))
 }
 
+/// Saving Settings can change a root's `sync_debounce_secs` out from under a
+/// countdown that's already counting down for that root (issue #87): without
+/// this, a save made just before Settings was saved would still fire at the
+/// old delay, ignoring the value the user just set. Reads the roots as they
+/// were *before* the write to know which ones actually changed -- comparing
+/// against the drafts themselves would not catch e.g. a rename of an existing
+/// root's `id`-less counterpart, and diffing the returned `Config` against a
+/// snapshot taken first avoids any race with a concurrent save.
 #[tauri::command]
-fn save_config(drafts: Vec<RootDraft>) -> Result<Config, String> {
-    config::save_config(drafts)
+fn save_config(app: AppHandle, drafts: Vec<RootDraft>) -> Result<Config, String> {
+    let previous_roots = config::all_root_configs();
+    let config = config::save_config(drafts)?;
+
+    let manager = app.state::<Arc<SyncManager>>().inner().clone();
+    for root in &config.roots {
+        let previous_debounce = previous_roots
+            .iter()
+            .find(|previous| previous.id == root.id)
+            .map(|previous| previous.sync_debounce_secs);
+        if previous_debounce == Some(root.sync_debounce_secs) {
+            // Unchanged (or a brand new root, which can have no countdown in
+            // progress for an id that didn't exist a moment ago) -- leave
+            // this root's slot alone.
+            continue;
+        }
+        sync::SyncManager::rearm_delay(app.clone(), manager.clone(), root.clone());
+    }
+
+    Ok(config)
 }
 
 #[tauri::command]
