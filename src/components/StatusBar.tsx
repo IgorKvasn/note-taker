@@ -12,6 +12,11 @@ export function countWords(text: string): number {
   return trimmed === "" ? 0 : trimmed.split(/\s+/).length;
 }
 
+/** The open note's autosave state (issue #96). `"clean"` renders nothing --
+ * a permanent "Saved" marker is visual noise that trains users to ignore
+ * the widget, so this segment only ever surfaces the states worth acting on. */
+export type SaveState = "clean" | "pending" | "failed";
+
 interface StatusBarProps {
   /** The root the open note belongs to, or `null` when no note is open. */
   root: RootConfig | null;
@@ -19,12 +24,7 @@ interface StatusBarProps {
   path: string | null;
   /** The open note's live content, or `null` when no note is open. */
   content: string | null;
-  /**
-   * The open note's autosave state (issue #96). `"clean"` renders nothing --
-   * a permanent "Saved" marker is visual noise that trains users to ignore
-   * the widget, so this segment only ever surfaces the states worth acting on.
-   */
-  saveState: "clean" | "pending" | "failed";
+  saveState: SaveState;
 }
 
 export function StatusBar({ root, path, content, saveState }: StatusBarProps) {

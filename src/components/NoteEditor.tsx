@@ -27,6 +27,7 @@ import { NoteToolbar } from "./NoteToolbar";
 import { BacklinksSection } from "./BacklinksSection";
 import { useNoteLinks } from "../hooks/useNoteLinks";
 import { Spinner } from "./Spinner";
+import type { SaveState } from "./StatusBar";
 import "./NoteEditor.css";
 
 // Code-split alongside the editor itself: the markdown renderer and its syntax
@@ -346,7 +347,7 @@ interface NoteEditorProps {
    * edit burst re-renders the caller a few times rather than once per
    * character.
    */
-  onSaveStateChange?: (state: "clean" | "pending" | "failed") => void;
+  onSaveStateChange?: (state: SaveState) => void;
 }
 
 /**
@@ -384,7 +385,7 @@ export function NoteEditor({
   // callback fires only on transitions (issue #96) rather than once per
   // keystroke -- the debounce-armed call site below re-arms the timeout on
   // every keystroke, but must only report "pending" the first time.
-  const lastReportedSaveStateRef = useRef<"clean" | "pending" | "failed">("clean");
+  const lastReportedSaveStateRef = useRef<SaveState>("clean");
   // Set true by the mount effect's cleanup below; checked both there (as
   // `isCancelled`, its own closure copy) and inside `flushPendingSave`'s retry
   // `.catch`, which runs outside that effect and so needs this ref -- a plain
@@ -420,7 +421,7 @@ export function NoteEditor({
    * actual change from the last one reported -- the debounce-armed call site
    * re-arms on every keystroke, so without this check "pending" would fire
    * once per character instead of once per edit burst. */
-  const reportSaveState = (state: "clean" | "pending" | "failed") => {
+  const reportSaveState = (state: SaveState) => {
     if (lastReportedSaveStateRef.current === state) {
       return;
     }

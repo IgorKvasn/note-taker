@@ -10,7 +10,7 @@ import { NotesPanel } from "./components/NotesPanel";
 import { RootsEditor } from "./components/RootsEditor";
 import { Spinner } from "./components/Spinner";
 import { SplitPane } from "./components/SplitPane";
-import { StatusBar } from "./components/StatusBar";
+import { StatusBar, type SaveState } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { useAttachmentResolver } from "./hooks/useAttachmentResolver";
@@ -78,7 +78,7 @@ export function App() {
     openNoteContentRef.current = content;
     setOpenNoteContent(content);
   }, []);
-  const handleSaveStateChange = useCallback((state: "clean" | "pending" | "failed") => {
+  const handleSaveStateChange = useCallback((state: SaveState) => {
     setSaveState(state);
   }, []);
   // The open note's flushPendingSave, if any -- a manual sync (issue #92)
@@ -94,7 +94,7 @@ export function App() {
   // indicator -- lives here rather than in NoteEditor since StatusBar is a
   // sibling of it, not a child. Reset on note switch below, next to the
   // `openNoteKey` effect that drives it.
-  const [saveState, setSaveState] = useState<"clean" | "pending" | "failed">("clean");
+  const [saveState, setSaveState] = useState<SaveState>("clean");
   // Flushes the open note's pending autosave only if it belongs to `rootId` --
   // a manual sync on a root with no open note (or a different root's note
   // open) has nothing to flush.
@@ -304,8 +304,8 @@ export function App() {
     setIsSettingsOpen(false);
   }, []);
 
-  const openNoteRoot =
-    openNote !== null ? (configOutcome?.type === "ok" ? configOutcome.config.roots.find((root) => root.id === openNote.rootId) ?? null : null) : null;
+  const availableRoots = configOutcome?.type === "ok" ? configOutcome.config.roots : [];
+  const openNoteRoot = openNote !== null ? (availableRoots.find((root) => root.id === openNote.rootId) ?? null) : null;
 
   if (configOutcome === null) {
     return (
