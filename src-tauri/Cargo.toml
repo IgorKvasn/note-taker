@@ -18,9 +18,14 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 directories = "6"
+# Encodes the raw RGBA the clipboard hands back into PNG (spec §11.3). The
+# `image` crate would do the same job, but `png` is the only format needed here
+# and is already in the tree transitively -- no new decoder stack pulled in.
+png = "0.18.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tauri = { version = "2.11.5", features = [] }
+tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2"

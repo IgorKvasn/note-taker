@@ -29,6 +29,7 @@ export const COMMAND_CHECK_FOR_UPDATE = "check_for_update";
 export const COMMAND_PICK_IMAGE_FILE = "pick_image_file";
 export const COMMAND_WRITE_ATTACHMENT = "write_attachment";
 export const COMMAND_IMPORT_ATTACHMENT = "import_attachment";
+export const COMMAND_PASTE_CLIPBOARD_IMAGE = "paste_clipboard_image";
 export const COMMAND_READ_ATTACHMENT = "read_attachment";
 export const COMMAND_CLEANUP_ATTACHMENTS = "cleanup_attachments";
 export const COMMAND_PREVIEW_ATTACHMENT_CLEANUP = "preview_attachment_cleanup";

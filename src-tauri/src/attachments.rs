@@ -118,6 +118,45 @@ pub fn write_attachment(
     Ok(format!("{ATTACHMENT_SCHEME}{id}"))
 }
 
+const RGBA_BYTES_PER_PIXEL: usize = 4;
+
+/// PNG-encodes a raw RGBA buffer, as read from the system clipboard (issue
+/// #91). The clipboard yields undecorated pixels, not an encoded image, so
+/// this must run before [`write_attachment`] -- whose magic-byte sniff would
+/// otherwise reject the raw buffer outright.
+///
+/// Validates the buffer against `width x height x 4` first: a mismatch means
+/// the clipboard handed back something other than what its own dimensions
+/// describe, which would otherwise panic inside the encoder.
+pub fn encode_rgba_as_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 {
+        return Err("clipboard image has zero width or height".to_string());
+    }
+
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(RGBA_BYTES_PER_PIXEL))
+        .ok_or_else(|| "clipboard image dimensions are implausibly large".to_string())?;
+
+    if rgba.len() != expected {
+        return Err(format!(
+            "clipboard image buffer is {} bytes but {width}x{height} RGBA needs {expected}",
+            rgba.len()
+        ));
+    }
+
+    let mut png_bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png_bytes, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(rgba))
+        .map_err(|error| format!("could not PNG-encode the clipboard image: {error}"))?;
+
+    Ok(png_bytes)
+}
+
 /// Reads `absolute_path` server-side and otherwise behaves exactly like
 /// [`write_attachment`] (spec §11.3): same magic-byte validation, same ULID
 /// generation, same `.attachments/` write. `original_name` is `None` so the
@@ -361,6 +400,64 @@ mod tests {
         let result = import_attachment(root.path(), Path::new("/nonexistent/does-not-exist.png"));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn encode_rgba_as_png_produces_bytes_that_pass_the_magic_byte_sniff() {
+        let rgba = vec![0xFF; 2 * 3 * RGBA_BYTES_PER_PIXEL];
+
+        let png_bytes = encode_rgba_as_png(&rgba, 2, 3).unwrap();
+
+        assert_eq!(sniff_image_extension(&png_bytes).unwrap(), "png");
+    }
+
+    #[test]
+    fn encode_rgba_as_png_output_is_accepted_by_write_attachment_end_to_end() {
+        let dir = TempDir::new().unwrap();
+        let rgba = vec![0x7F; 4 * 4 * RGBA_BYTES_PER_PIXEL];
+        let png_bytes = encode_rgba_as_png(&rgba, 4, 4).unwrap();
+
+        let reference = write_attachment(dir.path(), &png_bytes, None).unwrap();
+
+        let id = reference.strip_prefix(ATTACHMENT_SCHEME).unwrap();
+        let path = find_attachment_path(dir.path(), id).unwrap();
+        assert_eq!(path.extension().unwrap().to_str().unwrap(), "png");
+        assert_eq!(
+            path.file_name().unwrap().to_string_lossy(),
+            format!("{id}-pasted.png"),
+            "a clipboard paste has no filename, so it takes the `pasted` default"
+        );
+    }
+
+    #[test]
+    fn encode_rgba_as_png_rejects_a_buffer_that_does_not_match_the_stated_dimensions() {
+        // One pixel short of 2x2 RGBA -- the shape that would panic inside the
+        // encoder if it reached it.
+        let rgba = vec![0xFF; 3 * RGBA_BYTES_PER_PIXEL];
+
+        let result = encode_rgba_as_png(&rgba, 2, 2);
+
+        assert!(
+            result.is_err(),
+            "a short buffer must be rejected, not panic"
+        );
+    }
+
+    #[test]
+    fn encode_rgba_as_png_rejects_zero_dimensions_rather_than_emitting_an_empty_image() {
+        let result = encode_rgba_as_png(&[], 0, 0);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encode_rgba_as_png_rejects_dimensions_that_overflow_a_buffer_length() {
+        let result = encode_rgba_as_png(&[0xFF; 4], u32::MAX, u32::MAX);
+
+        assert!(
+            result.is_err(),
+            "an overflowing width x height x 4 must be reported, not wrap around"
+        );
     }
 
     #[test]

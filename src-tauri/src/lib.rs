@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_window_state::StateFlags;
 
@@ -352,6 +353,58 @@ fn import_attachment(
     Ok(reference)
 }
 
+/// Distinguishes "the clipboard simply holds no image" from a real clipboard
+/// failure, so an ordinary empty paste stays silent while a genuine failure
+/// reaches the user (issue #91).
+///
+/// Matching on the message is regrettable but forced: the plugin collapses
+/// every cause into `Error::Clipboard(String)`, discarding `arboard`'s own
+/// variants, so the underlying `ContentNotAvailable` -- the empty/no-such-format
+/// case -- is not otherwise reachable. Kept as a substring match against that
+/// variant's stable wording rather than the whole message, which `arboard`
+/// composes differently per platform. An upstream reword degrades this to
+/// reporting an empty clipboard as an error, never to losing an image.
+fn is_clipboard_empty_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("not available") || message.contains("clipboard is empty")
+}
+
+/// Writes the system clipboard's image into `.attachments/` (issue #91), for
+/// the paste path the webview cannot serve itself: under Wayland, WebKitGTK
+/// hands the webview a completely empty `DataTransfer` for images, so the
+/// frontend's own paste handler sees nothing to claim. Reading the clipboard
+/// here bypasses the webview entirely.
+///
+/// `Ok(None)` when the clipboard holds no image, so an ordinary empty paste
+/// stays a silent no-op rather than surfacing a spurious error. A genuine
+/// clipboard failure is propagated instead, so it can reach the attachment
+/// error UI -- the two are told apart by [`is_clipboard_empty_error`].
+///
+/// Two constraints shape the body:
+/// - **Must stay `async`.** `read_image` deadlocks the whole app if it runs on
+///   the main thread on Linux -- the affected platform. An `async fn` command
+///   runs on the async runtime's thread pool, exactly like [`pick_folder`].
+/// - **The clipboard yields raw RGBA, not an encoded image**, which
+///   [`attachments::write_attachment`]'s magic-byte sniff would reject; it is
+///   PNG-encoded first. Everything downstream of that -- ULID naming, the
+///   `.attachments/` layout, validation, the sync trigger -- is the same
+///   shared path every other attachment write takes.
+#[tauri::command]
+async fn paste_clipboard_image(app: AppHandle, root_id: String) -> Result<Option<String>, String> {
+    let root_path = config::find_root_path(&root_id)?;
+
+    let image = match app.clipboard().read_image() {
+        Ok(image) => image,
+        Err(error) if is_clipboard_empty_error(&error.to_string()) => return Ok(None),
+        Err(error) => return Err(format!("could not read the clipboard: {error}")),
+    };
+
+    let png_bytes = attachments::encode_rgba_as_png(image.rgba(), image.width(), image.height())?;
+    let reference = attachments::write_attachment(&root_path, &png_bytes, None)?;
+    trigger_sync_for_root_immediate(&app, &root_id);
+    Ok(Some(reference))
+}
+
 /// Returns an attachment's raw bytes as a binary IPC response rather than a
 /// serialized byte array -- `tauri::ipc::Response` delivers an `ArrayBuffer`
 /// to JS via `InvokeResponseBody::Raw`, avoiding the ~4.4x inflation a JSON
@@ -541,6 +594,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         // FULLSCREEN is deliberately excluded: quitting while fullscreen would reopen
@@ -573,6 +627,7 @@ pub fn run() {
             scan_links,
             write_attachment,
             import_attachment,
+            paste_clipboard_image,
             read_attachment,
             cleanup_attachments,
             preview_attachment_cleanup,
@@ -616,6 +671,32 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `arboard`'s own `ContentNotAvailable` wording, verbatim -- the message
+    /// the clipboard plugin surfaces for an empty clipboard or one holding no
+    /// image. Pinned here so an upstream reword fails this test rather than
+    /// silently turning empty pastes into user-visible errors.
+    const CONTENT_NOT_AVAILABLE: &str =
+        "The clipboard contents were not available in the requested format or the clipboard is empty.";
+
+    #[test]
+    fn an_empty_clipboard_is_not_treated_as_a_failure() {
+        assert!(is_clipboard_empty_error(CONTENT_NOT_AVAILABLE));
+    }
+
+    #[test]
+    fn a_real_clipboard_failure_is_not_mistaken_for_an_empty_clipboard() {
+        for message in [
+            "The selected clipboard is not supported with the current system configuration.",
+            "The native clipboard is not accessible due to being held by another party.",
+            "The image or the text that was about the be transferred to/from the clipboard could not be converted to the appropriate format.",
+        ] {
+            assert!(
+                !is_clipboard_empty_error(message),
+                "must surface to the user rather than be swallowed: {message}"
+            );
+        }
+    }
 
     #[test]
     fn app_version_matches_cargo_manifest() {

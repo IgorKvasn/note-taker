@@ -379,7 +379,7 @@ Three ways for an image to enter a note, all producing the same `attachment:<ULI
 
 | Entry point | Mechanism | Ticket |
 |---|---|---|
-| Clipboard paste | `EditorView.domEventHandlers({ paste })` on the CM6 editor — a plain DOM `paste` event, no Tauri clipboard plugin | [#67](https://github.com/IgorKvasn/note-taker/issues/67) |
+| Clipboard paste | `EditorView.domEventHandlers({ paste })` on the CM6 editor — a plain DOM `paste` event, falling back to a backend clipboard read where the webview delivers nothing (§11.1) | [#67](https://github.com/IgorKvasn/note-taker/issues/67), [#91](https://github.com/IgorKvasn/note-taker/issues/91) |
 | Drag-and-drop | Native `getCurrentWebview().onDragDropEvent()` exclusively — no DOM listeners, no `tauri.conf.json` change | [#72](https://github.com/IgorKvasn/note-taker/issues/72) |
 | Toolbar file picker | The 🖼 button's new "Attach image file…" menu item | [#71](https://github.com/IgorKvasn/note-taker/issues/71) |
 
@@ -389,17 +389,22 @@ The 🖼 button's existing typed-URL behaviour (inserting `![alt](url)` for a re
 
 Handled by `EditorView.domEventHandlers({ paste })`, which runs before CM6's built-in paste handling. The handler must decide **synchronously**: return `true` to claim the event (CM6 calls `preventDefault()`), then perform the async import and insert the reference when it resolves; returning `false`/`undefined` falls through to CM6's normal text paste.
 
-Clipboard image paste is **three distinct inputs, not one**:
+Clipboard image paste is **four distinct inputs, not one**:
 
 | Clipboard content | Source example | Handling |
 |---|---|---|
 | Encoded image bytes (`clipboardData.files`) | Screenshot tool (GNOME Screenshot, Flameshot, Spectacle) | `write_attachment` with the file's bytes |
 | A `file:///` path (`text/uri-list`) | Copying a file in Nautilus | `import_attachment` with the path |
+| An entirely empty `DataTransfer` | A screenshot pasted on Linux/Wayland | `paste_clipboard_image` — the backend reads the system clipboard |
 | Non-image content | Any other paste | Falls through to CM6's normal text paste |
 
 Nothing may hardcode `image/png` — the source tool decides the format, and the handler must branch on the actual `File.type` or sniff magic bytes. A pasted image has no original filename, so it is named `<ULID>-pasted.png` (or the appropriate extension) rather than left unnamed.
 
-**Version floor:** the WebKitGTK bug that hid images from `clipboardData.items`/`.files` (WebKit bug 218519) is fixed in the 2.52.x series that Ubuntu 26.04 ships (§10), verified as 2.52.3 on the development machine. The exact release that introduced the fix is unverified — see §13.
+**On Linux/Wayland the webview delivers no image data at all** ([#91](https://github.com/IgorKvasn/note-taker/issues/91)). WebKitGTK 2.52.3 hands the `paste` event a completely empty `DataTransfer` — no `files`, no `items`, not even a populated `types` — while the image is demonstrably on the system clipboard. This is not the `clipboardData.files`-versus-`.items` distinction that WebKit bug 218519 describes: *both* are empty, so no webview-side fallback can recover the bytes.
+
+A paste carrying nothing at all is therefore claimed and routed to `paste_clipboard_image`, which reads the clipboard through `tauri-plugin-clipboard-manager` (Wayland protocol directly, bypassing the webview) and returns `null` when there is genuinely no image, keeping an empty paste a silent no-op. Because `read_image` hands back **raw RGBA rather than an encoded image**, the buffer is PNG-encoded before reaching `write_attachment`, whose magic-byte sniff would otherwise reject it; the command is `async` because `read_image` deadlocks the app if it runs on the main thread on Linux. This covers both <kbd>Ctrl</kbd>+<kbd>V</kbd> and the webview context menu's **Paste**, which dispatches an identical event — no custom context menu is needed.
+
+The fallback is **not** gated behind a platform check: where the webview populates `DataTransfer` the earlier rows claim the paste first and it is never reached, so one code path serves every platform and self-heals if WebKitGTK is fixed upstream. Its macOS/Windows behaviour is unverified — see §13.
 
 #### Drag-and-drop
 
@@ -435,6 +440,7 @@ Dot-prefixed, so `list_tree` (`src-tauri/src/tree.rs:37`) and search (`src-tauri
 |---|---|---|
 | `write_attachment` | `(root_id, bytes, original_name) -> Result<String, String>` | Backend generates the ULID, mirroring `create_note`. Returns the `attachment:<ULID>` reference to insert. |
 | `import_attachment` | `(root_id, absolute_path) -> Result<String, String>` | Reads the file server-side, then mirrors `write_attachment` exactly (same sniffing, same ULID generation, same `.attachments/` write, same sync trigger). |
+| `paste_clipboard_image` | `(root_id) -> Result<Option<String>, String>` | Reads the system clipboard directly where the webview delivers nothing (§11.1). **`async`** — `read_image` deadlocks the app on Linux if it runs on the main thread. PNG-encodes the raw RGBA it returns, then hands off to `write_attachment`'s path unchanged. `Ok(None)` — the only `Option` in this table — means "no image on the clipboard", keeping an empty paste silent; a genuine clipboard failure is an `Err` so it reaches the attachment error UI. |
 | `read_attachment` | `(root_id, id) -> Result<tauri::ipc::Response, String>` | Raw bytes. Resolves the ULID via a directory-list prefix-match on `.attachments/` — no content scan needed, unlike `note:` link resolution. |
 
 **`read_attachment` must return `tauri::ipc::Response`, not `Vec<u8>`.** Tauri's blanket `impl<T: Serialize> IpcResponse for T` serializes a byte vector to a JSON array of numbers — measured at **4.43x inflation** on a real PNG — whereas `Response::new` delivers an `ArrayBuffer` to JS via `InvokeResponseBody::Raw`. The frontend mints a `blob:` URL from that `ArrayBuffer` with `createObjectURL` — a zero-copy reference, whereas `data:` would require re-encoding bytes already in hand to base64 for no benefit ([#66](https://github.com/IgorKvasn/note-taker/issues/66)).
@@ -442,7 +448,7 @@ Dot-prefixed, so `list_tree` (`src-tauri/src/tree.rs:37`) and search (`src-tauri
 `import_attachment` is a deliberate, narrow exception to §9.2's rule that absolute paths never cross the IPC boundary — shared plumbing between drag-and-drop and the `text/uri-list` paste case, rather than widening a general-purpose filesystem plugin's scope allowlist.
 
 - **Validation** — magic-byte sniffing server-side against an allowed set (PNG/JPEG/GIF/WebP). Neither a client-supplied extension nor a client-supplied MIME type is trusted.
-- **Sync chain** — `write_attachment` and `import_attachment` trigger it the same as every other mutation (§9.4), skipping the §3 title validation (attachment filenames are app-generated, not user-typed).
+- **Sync chain** — `write_attachment`, `import_attachment`, and `paste_clipboard_image` trigger it the same as every other mutation (§9.4), skipping the §3 title validation (attachment filenames are app-generated, not user-typed).
 - **Commit granularity** — not forced to one commit with the following note save. The existing coalescing queue only merges triggers that arrive while a sync is already in flight, so an attachment write immediately followed by a note save may land as one commit or two depending on timing. Two commits is an accepted, explicit outcome, not a bug.
 
 ### 11.4 Rendering
@@ -494,7 +500,7 @@ A scan for unreferenced attachments runs automatically in the background **on ap
 ### 11.7 Cross-references
 
 - **§5 (toolbar)** — 🖼 is the one button that opens a menu rather than acting directly; see §11.1.
-- **§9.4 (command surface)** — `write_attachment`, `import_attachment`, `read_attachment` join the existing table; see §11.3.
+- **§9.4 (command surface)** — `write_attachment`, `import_attachment`, `paste_clipboard_image`, `read_attachment` join the existing table; see §11.3.
 - **§12 (accepted gaps)** — every gap from this section is consolidated there.
 
 ---
@@ -534,7 +540,9 @@ Flagged during packaging and attachment research and not settled from primary so
 - `libsoup3` coupling is inferred from WebKitGTK packaging, not stated on a Tauri page.
 - No official minimum Ubuntu version from Tauri; targeting 26.04 is our support policy, not a documented floor.
 - GitHub Pages as apt hosting is reasoned from apt's static-HTTP requirements, not documented as supported.
-- The exact WebKitGTK release that fixed clipboard image paste (WebKit bug 218519) is inferred from the bug thread, not a release-notes citation; the supported-platform version (2.52.3 on Ubuntu 26.04) is independently confirmed as past the fix, but the precise floor is not.
+- The exact WebKitGTK release that fixed clipboard image paste (WebKit bug 218519) is inferred from the bug thread, not a release-notes citation. Superseded in practice by [#91](https://github.com/IgorKvasn/note-taker/issues/91): 2.52.3 under Wayland delivers an empty `DataTransfer` regardless, so the version floor no longer governs whether paste works — the backend clipboard read does (§11.1).
+- Whether the empty-`DataTransfer` paste fallback (§11.1) is truly a no-op on macOS and Windows is unverified; only the Linux/Wayland failure was reproduced. The design assumes those webviews populate `DataTransfer` so the fallback is never reached.
+- Whether the empty `DataTransfer` is specific to Wayland or also affects X11 sessions of the same WebKitGTK build was not tested.
 - No in-webview benchmark of `blob:` vs `data:` decode/retention behavior was run; the 4.43x JSON-inflation figure is a measured serialization ratio, not an end-to-end render timing.
 
 ---

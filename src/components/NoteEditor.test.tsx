@@ -1030,8 +1030,12 @@ describe("NoteEditor", () => {
     /** jsdom implements neither `ClipboardEvent` nor `DataTransfer` fully
      * enough for `.files`/`.getData`, so this fakes just the surface the
      * paste handler reads, matching `attachmentPaste.test.ts`'s fake. */
-    function pasteClipboardData(options: { files?: File[]; uriList?: string } = {}) {
+    function pasteClipboardData(options: { files?: File[]; uriList?: string; text?: string } = {}) {
       const files = options.files ?? [];
+      const byFormat: Record<string, string> = {
+        "text/uri-list": options.uriList ?? "",
+        "text/plain": options.text ?? "",
+      };
       return {
         files: {
           length: files.length,
@@ -1040,7 +1044,7 @@ describe("NoteEditor", () => {
             yield* files;
           },
         } as unknown as FileList,
-        getData: (format: string) => (format === "text/uri-list" ? options.uriList ?? "" : ""),
+        getData: (format: string) => byFormat[format] ?? "",
       };
     }
 

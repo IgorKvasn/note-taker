@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { EditorView } from "@codemirror/view";
-import { COMMAND_IMPORT_ATTACHMENT, COMMAND_WRITE_ATTACHMENT } from "../ipc";
+import { COMMAND_IMPORT_ATTACHMENT, COMMAND_PASTE_CLIPBOARD_IMAGE, COMMAND_WRITE_ATTACHMENT } from "../ipc";
 import { attachmentTarget, formatAttachment } from "./attachments";
 
 /**
@@ -59,6 +59,37 @@ function insertAttachmentReference(view: EditorView, pos: number, alt: string, r
   view.focus();
 }
 
+/** The text formats a paste worth leaving to CodeMirror could arrive as.
+ * `text/uri-list` is included so a non-`file://` URI paste stays text. */
+const TEXT_FORMATS = ["text/plain", "text/uri-list", "text/html"];
+
+/**
+ * True when the webview handed us a paste carrying no usable content at all:
+ * no image bytes, no `file://` URI, and no text of any kind.
+ *
+ * Under Wayland, WebKitGTK delivers an entirely empty `DataTransfer` for an
+ * image paste -- empty `files`, empty `items`, not even a populated `types`
+ * -- while the image really is on the system clipboard (issue #91). That is
+ * indistinguishable, from here, from a paste of a genuinely empty clipboard,
+ * so both are routed to the backend; it answers `null` for the latter.
+ *
+ * Text is checked because a text paste must keep falling through to
+ * CodeMirror untouched. A clipboard holding both text and an image resolves
+ * as text, matching what every other platform's webview does with the same
+ * clipboard.
+ */
+function isEmptyDataTransfer(clipboardData: DataTransfer): boolean {
+  if (clipboardData.files.length > 0) {
+    return false;
+  }
+  return TEXT_FORMATS.every((format) => clipboardData.getData(format) === "");
+}
+
+/** Matches the backend's own fallback (`attachments.rs`'s
+ * `sanitize_original_name`), so a pasted image's alt text and the stem of the
+ * filename it was written under agree. */
+const PASTED_IMAGE_ALT = "pasted";
+
 export interface AttachmentPasteHandlers {
   onImportError?: (error: string) => void;
 }
@@ -69,6 +100,13 @@ export interface AttachmentPasteHandlers {
  * unclaimed so CodeMirror's own paste handling runs. Must decide synchronously
  * whether to claim the paste -- `preventDefault()` is called (if at all)
  * before any async work starts, per spec §11's paste requirement.
+ *
+ * A paste carrying nothing at all is claimed too, and routed to the backend to
+ * read the system clipboard directly (issue #91) -- on Wayland that is the
+ * only shape an image paste ever takes. The fallback is deliberately not gated
+ * behind a platform check: where the webview populates `DataTransfer` the
+ * branches above claim the paste first and this is never reached, so one code
+ * path serves every platform and self-heals if WebKitGTK is fixed upstream.
  *
  * Returns `true` if the event was claimed (regardless of whether the async
  * write/import eventually succeeds), `false` if it was left alone.
@@ -88,7 +126,25 @@ export function handleAttachmentPaste(
   const fileUri = imageFile === null ? firstFileUri(clipboardData.getData("text/uri-list")) : null;
 
   if (imageFile === null && fileUri === null) {
-    return false;
+    if (!isEmptyDataTransfer(clipboardData)) {
+      return false;
+    }
+
+    // Claimed before any async work, exactly as the branches below do -- the
+    // decision to claim must be synchronous even though the answer to whether
+    // an image was actually there arrives later.
+    event.preventDefault();
+    const emptyPastePos = view.state.selection.main.head;
+
+    invoke<string | null>(COMMAND_PASTE_CLIPBOARD_IMAGE, { rootId })
+      .then((reference) => {
+        if (reference !== null) {
+          insertAttachmentReference(view, emptyPastePos, PASTED_IMAGE_ALT, reference);
+        }
+      })
+      .catch((error: unknown) => handlers.onImportError?.(error instanceof Error ? error.message : String(error)));
+
+    return true;
   }
 
   event.preventDefault();

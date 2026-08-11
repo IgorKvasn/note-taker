@@ -17,8 +17,16 @@ function makeView(doc: string, cursor: number): EditorView {
 
 /** jsdom implements neither `ClipboardEvent` nor `DataTransfer` fully enough
  * for `.files`/`.getData` -- this fakes just the surface
- * `handleAttachmentPaste` reads, plus a spyable `preventDefault`. */
-function makeClipboardEvent(options: { files?: File[]; uriList?: string } = {}): ClipboardEvent {
+ * `handleAttachmentPaste` reads, plus a spyable `preventDefault`.
+ *
+ * `text` models the plain-text payload a real paste carries independently of
+ * `uriList`. Passing neither yields the entirely empty `DataTransfer` that
+ * WebKitGTK delivers for an image paste under Wayland (issue #91) -- the shape
+ * the earlier version of this fake could not express, which is why the bug
+ * survived a green suite. */
+function makeClipboardEvent(
+  options: { files?: File[]; uriList?: string; text?: string; html?: string } = {},
+): ClipboardEvent {
   const files = options.files ?? [];
   const fileList = {
     length: files.length,
@@ -28,11 +36,17 @@ function makeClipboardEvent(options: { files?: File[]; uriList?: string } = {}):
     },
   } as unknown as FileList;
 
+  const byFormat: Record<string, string> = {
+    "text/uri-list": options.uriList ?? "",
+    "text/plain": options.text ?? "",
+    "text/html": options.html ?? "",
+  };
+
   return {
     preventDefault: vi.fn(),
     clipboardData: {
       files: fileList,
-      getData: (format: string) => (format === "text/uri-list" ? options.uriList ?? "" : ""),
+      getData: (format: string) => byFormat[format] ?? "",
     },
   } as unknown as ClipboardEvent;
 }
@@ -119,12 +133,22 @@ describe("handleAttachmentPaste", () => {
 
   it("leaves the event unclaimed and calls no backend command for plain text or other non-image content", () => {
     const view = makeView("Loaded", 6);
-    const event = makeClipboardEvent({ uriList: "just some plain text" });
+    const event = makeClipboardEvent({ text: "just some plain text" });
 
     const claimed = handleAttachmentPaste(event, view, "01ROOT");
 
     expect(claimed).toBe(false);
     expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("leaves a non-file:// URI paste to CodeMirror as ordinary text", () => {
+    const view = makeView("Loaded", 6);
+    const event = makeClipboardEvent({ uriList: "https://example.com/page" });
+
+    const claimed = handleAttachmentPaste(event, view, "01ROOT");
+
+    expect(claimed).toBe(false);
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -150,6 +174,88 @@ describe("handleAttachmentPaste", () => {
 
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
     expect(invoke).toHaveBeenCalledWith("write_attachment", expect.objectContaining({ originalName: "bytes.png" }));
+  });
+
+  describe("empty DataTransfer -- the shape WebKitGTK delivers for an image paste on Wayland", () => {
+    it("claims the paste, reads the image via the backend, and inserts the reference at the cursor", async () => {
+      invoke.mockResolvedValue("attachment:01WAY");
+      const view = makeView("Loaded", 6);
+      const event = makeClipboardEvent();
+
+      const claimed = handleAttachmentPaste(event, view, "01ROOT");
+
+      expect(claimed).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("paste_clipboard_image", { rootId: "01ROOT" }));
+      await vi.waitFor(() => expect(view.state.doc.toString()).toBe("Loaded![pasted](attachment:01WAY)"));
+      expect(view.state.selection.main.head).toBe("Loaded![pasted](attachment:01WAY)".length);
+    });
+
+    it("inserts the reference at the cursor position captured when the paste happened, not the current one", async () => {
+      let resolveInvoke: (reference: string) => void = () => {};
+      invoke.mockReturnValue(
+        new Promise<string>((resolve) => {
+          resolveInvoke = resolve;
+        }),
+      );
+      const view = makeView("Loaded", 3);
+      const event = makeClipboardEvent();
+
+      handleAttachmentPaste(event, view, "01ROOT");
+      // The user moves the cursor while the backend read is still in flight.
+      view.dispatch({ selection: { anchor: 6 } });
+      resolveInvoke("attachment:01POS");
+
+      await vi.waitFor(() => expect(view.state.doc.toString()).toBe("Loa![pasted](attachment:01POS)ded"));
+    });
+
+    it("inserts nothing and reports no error when the clipboard holds no image", async () => {
+      invoke.mockResolvedValue(null);
+      const view = makeView("Loaded", 6);
+      const event = makeClipboardEvent();
+      const onImportError = vi.fn();
+
+      const claimed = handleAttachmentPaste(event, view, "01ROOT", { onImportError });
+
+      expect(claimed).toBe(true);
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+      expect(view.state.doc.toString()).toBe("Loaded");
+      expect(onImportError).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a clipboard-read failure via onImportError and inserts nothing", async () => {
+      invoke.mockRejectedValue(new Error("could not PNG-encode the clipboard image"));
+      const view = makeView("Loaded", 6);
+      const event = makeClipboardEvent();
+      const onImportError = vi.fn();
+
+      handleAttachmentPaste(event, view, "01ROOT", { onImportError });
+
+      await vi.waitFor(() => expect(onImportError).toHaveBeenCalledWith("could not PNG-encode the clipboard image"));
+      expect(view.state.doc.toString()).toBe("Loaded");
+    });
+
+    it("leaves an HTML-only paste to CodeMirror rather than treating it as an empty clipboard", () => {
+      const view = makeView("Loaded", 6);
+      const event = makeClipboardEvent({ html: "<p>rich text</p>" });
+
+      const claimed = handleAttachmentPaste(event, view, "01ROOT");
+
+      expect(claimed).toBe(false);
+      expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("does not reach the backend fallback when the webview did populate image bytes", async () => {
+      invoke.mockResolvedValue("attachment:01BYT");
+      const view = makeView("", 0);
+      const event = makeClipboardEvent({ files: [pngFile("photo.png")] });
+
+      handleAttachmentPaste(event, view, "01ROOT");
+
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+      expect(invoke).not.toHaveBeenCalledWith("paste_clipboard_image", expect.anything());
+    });
   });
 
   it("surfaces the error via onImportError and inserts nothing when the backend call rejects", async () => {

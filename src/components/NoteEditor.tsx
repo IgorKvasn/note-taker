@@ -454,10 +454,11 @@ export function NoteEditor({
           markdownLivePreview,
           EditorView.domEventHandlers({
             paste: (event, editorView) => {
-              // Claimed pastes (image bytes or a file:// path) call
+              // Claimed pastes (image bytes, a file:// path, or an empty
+              // DataTransfer needing a backend clipboard read) call
               // preventDefault synchronously inside handleAttachmentPaste
-              // before any async work starts (issue #77); an unclaimed paste
-              // falls through to CodeMirror's own handling untouched.
+              // before any async work starts (issues #77, #91); an unclaimed
+              // paste falls through to CodeMirror's own handling untouched.
               return handleAttachmentPaste(event, editorView, rootId, {
                 onImportError: (error) => setAttachmentError(error),
               });
