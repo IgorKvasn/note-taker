@@ -16,6 +16,7 @@ permissions:
 jobs:
   frontend:
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -36,6 +37,7 @@ jobs:
   # job to fail in seconds instead of behind a full dependency build.
   rust-fmt:
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
 
@@ -49,6 +51,7 @@ jobs:
     # Must match the release build host: the .deb links against 26.04's glibc,
     # so checks run on the same release the artifact is built on. See README.md.
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -105,6 +108,7 @@ jobs:
     # so a malformed one silently downgrades a release to a patch.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     # The action reads the PR's commits from the REST API, not from git, so it
     # needs this on top of the workflow-wide contents: read.
     permissions:
