@@ -39,15 +39,21 @@
   background-color: var(--danger-color, #d94a4a);
 }
 
-.root-sync-indicator__retry {
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background-color: var(--surface-raised);
+.root-sync-indicator__label {
+  border: none;
+  background: none;
   color: inherit;
   font: inherit;
-  font-size: 0.7rem;
-  padding: 0 4px;
+  padding: 0;
   cursor: pointer;
+}
+
+.root-sync-indicator__label:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.root-sync-indicator__label:disabled {
+  cursor: default;
 }
 
 .root-sync-indicator__resolution-count {

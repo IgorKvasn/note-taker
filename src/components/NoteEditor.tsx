@@ -331,6 +331,13 @@ interface NoteEditorProps {
   /** Called once the first time this note switches to preview mode -- attachment
    * cleanup (issue #79) is triggered on the first preview-switch of any note. */
   onFirstPreview?: () => void;
+  /**
+   * Exposes this instance's `flushPendingSave` to the caller as soon as it's
+   * available, and again with `null` on unmount (issue #92): a manual sync
+   * click on this root must flush any unsaved edit before syncing, but the
+   * flush itself lives here, next to the debounce state it flushes.
+   */
+  onFlushPendingSaveChange?: (flush: (() => Promise<void>) | null) => void;
 }
 
 /**
@@ -350,6 +357,7 @@ export function NoteEditor({
   resolveAttachment,
   onContentChange,
   onFirstPreview,
+  onFlushPendingSaveChange,
 }: NoteEditorProps) {
   const { linkableNotes, resolveNoteLink, getBacklinks } = useNoteLinks(rootId);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -518,6 +526,16 @@ export function NoteEditor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootId, path]);
+
+  // Exposes flushPendingSave for as long as this instance lives -- safe as a
+  // mount/unmount-only effect (rather than depending on rootId/path) because
+  // the caller remounts this component on every note switch via its `key`,
+  // so rootId/path never change in place.
+  useEffect(() => {
+    onFlushPendingSaveChange?.(() => flushPendingSave());
+    return () => onFlushPendingSaveChange?.(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Reports the live buffer on every change (initial load, local edits, and
   // remote refreshes alike) -- attachment cleanup (issue #79) reads this as

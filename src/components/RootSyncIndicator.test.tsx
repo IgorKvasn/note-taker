@@ -31,33 +31,55 @@ describe("RootSyncIndicator", () => {
     listen.mockResolvedValue(() => {});
   });
 
-  it("shows local_only before get_root_status resolves and after it resolves to local_only", async () => {
+  it("shows local_only before get_root_status resolves and after it resolves to local_only, with a disabled sync button", async () => {
     mockStatus({ conflicted_paths: [], sync_state: { state: "local_only" } });
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
 
-    expect(await screen.findByText("Local only")).not.toBeNull();
+    const button = await screen.findByRole("button", { name: "Sync now" });
+    expect(button.textContent).toBe("Local only");
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.closest(".root-sync-indicator")?.getAttribute("title")).toBe("No remote configured for this root");
   });
 
-  it("reflects a conflict status from get_root_status and offers a retry", async () => {
+  it("reflects a conflict status from get_root_status with an enabled sync button", async () => {
     mockStatus({ conflicted_paths: ["shared.md"], sync_state: { state: "conflict" } });
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
 
-    await screen.findByText("Conflict");
-    expect(screen.getByRole("button", { name: "Retry" })).not.toBeNull();
+    const button = await screen.findByRole("button", { name: "Sync now" });
+    expect(button.textContent).toBe("Conflict");
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("shows Never synced when synced with no prior timestamp", async () => {
+    mockStatus({ conflicted_paths: [], sync_state: { state: "synced", last_synced: null } });
+    render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
+
+    expect(await screen.findByText("Never synced")).not.toBeNull();
+  });
+
+  it("shows a formatted time and full date+time tooltip when synced with a timestamp", async () => {
+    const timestamp = Date.now();
+    mockStatus({ conflicted_paths: [], sync_state: { state: "synced", last_synced: timestamp } });
+    render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
+
+    const button = await screen.findByRole("button", { name: /Sync now \(last synced/ });
+    const indicator = button.closest(".root-sync-indicator");
+    expect(indicator?.getAttribute("title")).not.toBeNull();
+    expect(indicator?.getAttribute("title")).not.toBe("");
   });
 
   it("updates to syncing then synced as sync-status events arrive, calling onSyncSettled on the terminal state", async () => {
     mockStatus({ conflicted_paths: [], sync_state: { state: "local_only" } });
     const onSyncSettled = vi.fn();
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={onSyncSettled} />);
-    await screen.findByText("Local only");
+    await screen.findByRole("button", { name: "Sync now" });
 
     await emitSyncStatus({ root_id: ROOT_ID, state: { state: "syncing" } });
     expect(await screen.findByText("Syncing…")).not.toBeNull();
     expect(onSyncSettled).not.toHaveBeenCalled();
 
-    await emitSyncStatus({ root_id: ROOT_ID, state: { state: "synced" } });
-    expect(await screen.findByText("Synced")).not.toBeNull();
+    await emitSyncStatus({ root_id: ROOT_ID, state: { state: "synced", last_synced: null } });
+    expect(await screen.findByText("Never synced")).not.toBeNull();
     expect(onSyncSettled).toHaveBeenCalledTimes(1);
   });
 
@@ -66,12 +88,12 @@ describe("RootSyncIndicator", () => {
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
     await screen.findByText("Local only");
 
-    await emitSyncStatus({ root_id: "01OTHER-ROOT", state: { state: "synced" } });
+    await emitSyncStatus({ root_id: "01OTHER-ROOT", state: { state: "synced", last_synced: null } });
 
     expect(screen.getByText("Local only")).not.toBeNull();
   });
 
-  it("shows the raw stderr as a title on an error state and clicking retry calls sync_root", async () => {
+  it("shows the raw stderr as a title on an error state and clicking the label calls sync_root", async () => {
     mockStatus({ conflicted_paths: [], sync_state: { state: "error", stderr: "permission denied" } });
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
 
@@ -79,9 +101,41 @@ describe("RootSyncIndicator", () => {
     expect(indicator?.getAttribute("title")).toBe("permission denied");
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Sync now" }));
 
     expect(invoke).toHaveBeenCalledWith("sync_root", { rootId: ROOT_ID });
+  });
+
+  it("awaits onFlushPendingSave before invoking sync_root", async () => {
+    mockStatus({ conflicted_paths: [], sync_state: { state: "synced", last_synced: null } });
+    let resolveFlush: () => void = () => {};
+    const onFlushPendingSave = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFlush = resolve;
+        }),
+    );
+    render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} onFlushPendingSave={onFlushPendingSave} />);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Sync now" }));
+
+    expect(onFlushPendingSave).toHaveBeenCalledWith(ROOT_ID);
+    expect(invoke).not.toHaveBeenCalledWith("sync_root", { rootId: ROOT_ID });
+
+    resolveFlush();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("sync_root", { rootId: ROOT_ID }));
+  });
+
+  it("disables the sync button and skips sync_root when local_only", async () => {
+    mockStatus({ conflicted_paths: [], sync_state: { state: "local_only" } });
+    render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
+
+    const button = await screen.findByRole("button", { name: "Sync now" });
+    const user = userEvent.setup();
+    await user.click(button);
+
+    expect(invoke).not.toHaveBeenCalledWith("sync_root", { rootId: ROOT_ID });
   });
 
   it("shows a resolution count and reports the conflicted paths when the root has conflicts", async () => {
@@ -112,8 +166,8 @@ describe("RootSyncIndicator", () => {
     render(<RootSyncIndicator rootId={ROOT_ID} onSyncSettled={() => {}} />);
     await screen.findByText("1 note needs resolution");
 
-    status = { conflicted_paths: [], sync_state: { state: "synced" } };
-    await emitSyncStatus({ root_id: ROOT_ID, state: { state: "synced" } });
+    status = { conflicted_paths: [], sync_state: { state: "synced", last_synced: null } };
+    await emitSyncStatus({ root_id: ROOT_ID, state: { state: "synced", last_synced: null } });
 
     await waitFor(() => expect(screen.queryByText(/needs? resolution/)).toBeNull());
   });

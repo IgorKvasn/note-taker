@@ -73,6 +73,27 @@ export function App() {
   const handleContentChange = useCallback((content: string) => {
     openNoteContentRef.current = content;
   }, []);
+  // The open note's flushPendingSave, if any -- a manual sync (issue #92)
+  // must flush an in-flight autosave debounce before syncing, but that
+  // function lives inside NoteEditor, which is only mounted when a note from
+  // that root happens to be open. Read via a ref (not state) since it's only
+  // ever called from an event handler, never rendered.
+  const flushOpenNoteSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const handleFlushPendingSaveChange = useCallback((flush: (() => Promise<void>) | null) => {
+    flushOpenNoteSaveRef.current = flush;
+  }, []);
+  // Flushes the open note's pending autosave only if it belongs to `rootId` --
+  // a manual sync on a root with no open note (or a different root's note
+  // open) has nothing to flush.
+  const flushPendingSaveForRoot = useCallback(
+    (rootId: string) => {
+      if (openNote === null || openNote.rootId !== rootId || flushOpenNoteSaveRef.current === null) {
+        return Promise.resolve();
+      }
+      return flushOpenNoteSaveRef.current();
+    },
+    [openNote],
+  );
   // Attachment cleanup (issue #79) runs once per session on the first switch
   // of any note to preview mode -- this ref (not state) tracks whether that's
   // already happened, since re-triggering on every later preview switch isn't
@@ -303,6 +324,7 @@ export function App() {
             openNote={openNote}
             onNoteDeleted={handleNoteDeleted}
             onNotePathChanged={notePathChangedHandler}
+            onFlushPendingSave={flushPendingSaveForRoot}
           />
         }
         right={
@@ -330,6 +352,7 @@ export function App() {
                 resolveAttachment={resolveAttachment}
                 onContentChange={handleContentChange}
                 onFirstPreview={() => triggerCleanupOnce(openNote.rootId)}
+                onFlushPendingSaveChange={handleFlushPendingSaveChange}
               />
             </Suspense>
           )

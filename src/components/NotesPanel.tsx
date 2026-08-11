@@ -39,6 +39,12 @@ interface NotesPanelProps {
    * the caller can keep it open and correctly addressed for the next save.
    */
   onNotePathChanged?: (rootId: string, fromPath: string, toPath: string) => void;
+  /**
+   * Flushes the open note's pending autosave before a manual sync (issue #92),
+   * resolving immediately if no note from that root is open. Threaded through
+   * to each root's `RootSyncIndicator`.
+   */
+  onFlushPendingSave?: (rootId: string) => Promise<void>;
 }
 
 const NO_EXPANDED_PATHS: Record<string, string[]> = {};
@@ -280,6 +286,7 @@ interface RootSectionProps {
   onCancelRename: () => void;
   onDropItem: (rootId: string, fromPath: string, fromIsDirectory: boolean, toDirPath: string) => void;
   onConflictedPathsChange: (rootId: string, paths: string[]) => void;
+  onFlushPendingSave?: (rootId: string) => Promise<void>;
 }
 
 function RootSection({
@@ -299,6 +306,7 @@ function RootSection({
   onCancelRename,
   onDropItem,
   onConflictedPathsChange,
+  onFlushPendingSave,
 }: RootSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [tree, setTree] = useState<TreeNode[] | null>(null);
@@ -401,6 +409,7 @@ function RootSection({
           rootId={root.id}
           onSyncSettled={loadTree}
           onConflictedPathsChange={(paths) => onConflictedPathsChange(root.id, paths)}
+          onFlushPendingSave={onFlushPendingSave}
         />
       </button>
 
@@ -481,6 +490,7 @@ export function NotesPanel({
   openNote = null,
   onNoteDeleted = noopNoteDeleted,
   onNotePathChanged = noopNotePathChanged,
+  onFlushPendingSave,
 }: NotesPanelProps) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -777,6 +787,7 @@ export function NotesPanel({
             onCancelRename={cancelRename}
             onDropItem={dropItem}
             onConflictedPathsChange={handleConflictedPathsChange}
+            onFlushPendingSave={onFlushPendingSave}
           />
         ))}
       </div>

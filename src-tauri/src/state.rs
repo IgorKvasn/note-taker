@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,12 @@ pub struct UiState {
     /// per-note state, so it carries over when switching notes and across restarts.
     #[serde(default)]
     pub editor_mode: EditorMode,
+    /// Completion time (epoch milliseconds) of each root's last successful
+    /// remote push (issue #92), keyed by root ID like `expanded_paths` so
+    /// entries survive a root being moved on disk. Absent for a root that has
+    /// never pushed successfully, or that has never had a remote configured.
+    #[serde(default)]
+    pub last_synced_at: std::collections::HashMap<String, u64>,
 }
 
 fn default_split_ratio() -> f64 {
@@ -54,8 +61,34 @@ impl Default for UiState {
             expanded_paths: std::collections::HashMap::new(),
             has_dismissed_local_only_notice: false,
             editor_mode: EditorMode::default(),
+            last_synced_at: std::collections::HashMap::new(),
         }
     }
+}
+
+/// Reads the persisted last-sync timestamp for `root_id`, if any (issue #92).
+pub fn last_synced_at(root_id: &str) -> Option<u64> {
+    get_state().last_synced_at.get(root_id).copied()
+}
+
+/// Serializes `record_last_synced_at`'s read-modify-write against itself
+/// (issue #92): unlike every other `state.toml` write, which comes from a
+/// single frontend-debounced `save_state` IPC call, this one can be called
+/// from multiple roots' independent background sync tasks at once -- without
+/// a lock spanning the read and the write, two concurrent callers could both
+/// read the same on-disk snapshot and the second `save_state` to finish would
+/// silently drop the first's update.
+static LAST_SYNCED_AT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Records `root_id`'s last-sync timestamp, leaving every other field of the
+/// persisted state untouched (issue #92).
+pub fn record_last_synced_at(root_id: &str, epoch_millis: u64) -> Result<(), String> {
+    let _guard = LAST_SYNCED_AT_LOCK.lock().unwrap();
+    let mut state = get_state();
+    state
+        .last_synced_at
+        .insert(root_id.to_string(), epoch_millis);
+    save_state(&state)
 }
 
 pub fn state_path() -> Option<PathBuf> {
@@ -166,11 +199,68 @@ mod tests {
                 )]),
                 has_dismissed_local_only_notice: true,
                 editor_mode: EditorMode::View,
+                last_synced_at: std::collections::HashMap::from([(
+                    "01AAA".to_string(),
+                    1_700_000_000_000,
+                )]),
             };
 
             save_state(&state).unwrap();
 
             assert_eq!(get_state(), state);
+        });
+    }
+
+    #[test]
+    fn record_last_synced_at_persists_without_disturbing_other_fields() {
+        with_xdg_config_home(|_| {
+            save_state(&UiState {
+                split_ratio: 0.42,
+                ..UiState::default()
+            })
+            .unwrap();
+
+            record_last_synced_at("01AAA", 1_700_000_000_000).unwrap();
+
+            let state = get_state();
+            assert_eq!(state.split_ratio, 0.42);
+            assert_eq!(last_synced_at("01AAA"), Some(1_700_000_000_000));
+        });
+    }
+
+    /// Two roots finishing a sync at nearly the same moment must not race:
+    /// without a lock spanning each call's read-modify-write, the second
+    /// `save_state` to finish could overwrite the first root's just-recorded
+    /// entry along with the rest of the snapshot it read before writing.
+    #[test]
+    fn record_last_synced_at_survives_concurrent_calls_for_different_roots() {
+        with_xdg_config_home(|_| {
+            let handles: Vec<_> = (0..8)
+                .map(|i| {
+                    std::thread::spawn(move || {
+                        record_last_synced_at(&format!("root-{i}"), 1_700_000_000_000 + i).unwrap();
+                    })
+                })
+                .collect();
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            for i in 0..8u64 {
+                assert_eq!(
+                    last_synced_at(&format!("root-{i}")),
+                    Some(1_700_000_000_000 + i),
+                    "root-{i}'s timestamp must survive concurrent writes from other roots"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn last_synced_at_is_none_for_a_root_that_has_never_synced() {
+        with_xdg_config_home(|_| {
+            assert_eq!(last_synced_at("01AAA"), None);
         });
     }
 

@@ -32,10 +32,43 @@ pub const EVENT_SYNC_STATUS: &str = "sync-status";
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SyncState {
     Syncing,
-    Synced,
+    /// `last_synced` is the completion time (epoch milliseconds) of this
+    /// root's last successful remote push (issue #92) -- not the last
+    /// attempt, and not a local-only commit. `None` when no push has ever
+    /// succeeded for this root, which the frontend renders as "Never synced".
+    Synced {
+        last_synced: Option<u64>,
+    },
     LocalOnly,
     Conflict,
-    Error { stderr: String },
+    Error {
+        stderr: String,
+    },
+}
+
+/// Milliseconds since the Unix epoch, `SyncState::Synced`'s timestamp unit.
+/// Falls back to `0` on a system clock set before 1970, which is not a case
+/// worth failing a sync over.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Builds the `Synced` state for a push that just succeeded on `root_id`,
+/// persisting the new timestamp (issue #92) so it survives an app restart.
+/// The write is fire-and-forget the same way `state.toml` writes already are
+/// elsewhere -- a failure to persist doesn't fail the sync itself, only means
+/// the timestamp won't survive a restart.
+fn synced_now(root_id: &str) -> SyncState {
+    let millis = now_millis();
+    if let Err(error) = crate::state::record_last_synced_at(root_id, millis) {
+        eprintln!("failed to persist last-synced timestamp for {root_id}: {error}");
+    }
+    SyncState::Synced {
+        last_synced: Some(millis),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -248,6 +281,19 @@ impl SyncManager {
         // to whichever save(s) armed it.
         trigger_sync_delayed(app, manager, root, None);
     }
+
+    /// Cancels `root`'s in-progress countdown, if any, without arming a new
+    /// one (issue #92): a manual sync click runs immediately via
+    /// [`trigger_sync`], so any delayed run still waiting behind it would
+    /// otherwise fire redundantly afterwards and re-flicker the indicator for
+    /// no reason. Bumping `delay_generation` is enough to make that sleeping
+    /// task find itself stale when it wakes -- same mechanism a rearm uses,
+    /// just without scheduling a replacement.
+    pub fn cancel_delay(&self, root_id: &str) {
+        let slot = self.slot_for(root_id);
+        slot.delay_generation.fetch_add(1, Ordering::SeqCst);
+        slot.delay_pending.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Startup catchup (issue #25): reactive-only sync leaves an interrupted push
@@ -282,6 +328,14 @@ pub fn emit_status(app: &AppHandle, root_id: &str, state: SyncState, origin_path
     }
 }
 
+/// The minimum time the `syncing` state stays visible before a terminal state
+/// replaces it (issue #92), so a fast sync remains visually perceptible --
+/// otherwise the manual sync button feels unresponsive and invites repeated
+/// clicks. Only applied here, on the shared chain every trigger runs through,
+/// rather than in the frontend, since a same-process delayed/immediate
+/// coalescing run and a manual click both go through this one path.
+const MIN_SYNCING_DURATION: Duration = Duration::from_millis(400);
+
 /// `git add` -> `git commit` -> (if configured) `git push` -> on rejection,
 /// merge and re-push. Runs synchronously on whatever thread calls it; the
 /// caller is expected to be the background task spawned by [`trigger_sync`].
@@ -291,11 +345,18 @@ fn run_sync_chain(
     root: &RootConfig,
     origin_paths: Vec<String>,
 ) {
+    let started_at = std::time::Instant::now();
     emit_status(app, &root.id, SyncState::Syncing, origin_paths.clone());
 
     let repo_path = Path::new(&root.path);
-    let (final_state, merged) = sync_once(repo_path, root.auto_sync, &root.remote_url);
+    let (final_state, merged) = sync_once(&root.id, repo_path, root.auto_sync, &root.remote_url);
     manager.record_state(&root.id, final_state.clone());
+
+    let elapsed = started_at.elapsed();
+    if elapsed < MIN_SYNCING_DURATION {
+        std::thread::sleep(MIN_SYNCING_DURATION - elapsed);
+    }
+
     // A merge (run only after a rejected push) can rewrite any tracked file
     // with remote-side content, including one of this run's own origin paths
     // -- so a merge invalidates the guarantee that those paths' disk content
@@ -309,7 +370,12 @@ fn run_sync_chain(
 /// tested against real throwaway git repos without a `tauri::AppHandle`. The
 /// returned `bool` is `true` if a `git merge` ran (i.e. the initial push was
 /// rejected) -- see `run_sync_chain`'s use of it to gate `origin_paths`.
-fn sync_once(repo_path: &Path, auto_sync: bool, remote_url: &str) -> (SyncState, bool) {
+fn sync_once(
+    root_id: &str,
+    repo_path: &Path,
+    auto_sync: bool,
+    remote_url: &str,
+) -> (SyncState, bool) {
     if let Err(stderr) = git_add_all(repo_path) {
         return (SyncState::Error { stderr }, false);
     }
@@ -325,8 +391,11 @@ fn sync_once(repo_path: &Path, auto_sync: bool, remote_url: &str) -> (SyncState,
     }
 
     match git_push(repo_path) {
-        Ok(()) => (SyncState::Synced, false),
-        Err(stderr) => (resolve_after_push_rejection(repo_path, &stderr), true),
+        Ok(()) => (synced_now(root_id), false),
+        Err(stderr) => (
+            resolve_after_push_rejection(root_id, repo_path, &stderr),
+            true,
+        ),
     }
 }
 
@@ -334,10 +403,10 @@ fn sync_once(repo_path: &Path, auto_sync: bool, remote_url: &str) -> (SyncState,
 /// most divergence silently. Only a merge leaving `<<<<<<<` markers behind is
 /// reported as `conflict`; anything else that fails the merge itself is a raw
 /// error, same as any other git failure.
-fn resolve_after_push_rejection(repo_path: &Path, push_stderr: &str) -> SyncState {
+fn resolve_after_push_rejection(root_id: &str, repo_path: &Path, push_stderr: &str) -> SyncState {
     match git_merge(repo_path) {
         Ok(()) => match git_push(repo_path) {
-            Ok(()) => SyncState::Synced,
+            Ok(()) => synced_now(root_id),
             Err(stderr) => SyncState::Error { stderr },
         },
         Err(MergeError::Conflict) => SyncState::Conflict,
@@ -436,6 +505,7 @@ pub struct MarkResolvedOutcome {
 /// immediately re-attempts the push -- the same push/merge-retry cycle
 /// `sync_once` already runs, so a second rejection is handled identically.
 pub fn mark_resolved(
+    root_id: &str,
     repo_path: &Path,
     relative_path: &str,
     absolute_path: &Path,
@@ -469,8 +539,8 @@ pub fn mark_resolved(
     }
 
     let sync_state = match git_push(repo_path) {
-        Ok(()) => SyncState::Synced,
-        Err(stderr) => resolve_after_push_rejection(repo_path, &stderr),
+        Ok(()) => synced_now(root_id),
+        Err(stderr) => resolve_after_push_rejection(root_id, repo_path, &stderr),
     };
     Ok(MarkResolvedOutcome { sync_state })
 }
@@ -513,12 +583,35 @@ pub fn conflicted_relative_paths(repo_path: &Path) -> Vec<String> {
         .collect()
 }
 
-pub fn root_status(repo_path: &Path, last_known_state: Option<SyncState>) -> RootStatus {
+/// `root_id` and `has_remote` are only used to hydrate a `Synced` state's
+/// timestamp from disk (issue #92) when this process has no in-memory
+/// `last_known_state` yet for the root (e.g. `get_root_status` called before
+/// any sync has run this session) -- without it, every root would flash
+/// "Never synced" right after launch even when a previous session already
+/// synced successfully. Gated on `has_remote` so a root whose remote was
+/// since removed doesn't resurrect a stale `Synced` state from before that
+/// change -- `local_only` roots never get a timestamp (spec part 2).
+pub fn root_status(
+    root_id: &str,
+    repo_path: &Path,
+    has_remote: bool,
+    last_known_state: Option<SyncState>,
+) -> RootStatus {
     let conflicted_paths = conflicted_relative_paths(repo_path);
     let sync_state = if !conflicted_paths.is_empty() {
         SyncState::Conflict
     } else {
-        last_known_state.unwrap_or(SyncState::LocalOnly)
+        last_known_state.unwrap_or_else(|| {
+            if !has_remote {
+                return SyncState::LocalOnly;
+            }
+            match crate::state::last_synced_at(root_id) {
+                Some(last_synced) => SyncState::Synced {
+                    last_synced: Some(last_synced),
+                },
+                None => SyncState::LocalOnly,
+            }
+        })
     };
 
     RootStatus {
@@ -537,6 +630,27 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
+    /// `synced_now`/`state::last_synced_at` read `$XDG_CONFIG_HOME` through
+    /// `directories::BaseDirs`, which is process-wide state -- any test whose
+    /// sync chain reaches a real push success must run inside this, sharing
+    /// `config::tests::ENV_LOCK` so it doesn't race the same env var against
+    /// config.rs's and state.rs's own tests.
+    fn with_xdg_config_home<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = crate::config::tests::ENV_LOCK.lock().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let previous = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+
+        let result = f();
+
+        match previous {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+
+        result
+    }
+
     /// The frontend's `SyncState` union (`src/ipc.ts`) matches on these exact
     /// tag strings, so the serde renaming is part of the IPC contract rather
     /// than an internal detail: `rename_all = "lowercase"` would silently emit
@@ -551,7 +665,12 @@ mod tests {
         };
 
         assert_eq!(tag_of(&SyncState::Syncing), "syncing");
-        assert_eq!(tag_of(&SyncState::Synced), "synced");
+        assert_eq!(
+            tag_of(&SyncState::Synced {
+                last_synced: Some(0)
+            }),
+            "synced"
+        );
         assert_eq!(tag_of(&SyncState::LocalOnly), "local_only");
         assert_eq!(tag_of(&SyncState::Conflict), "conflict");
         assert_eq!(
@@ -569,7 +688,9 @@ mod tests {
     fn sync_status_event_serializes_origin_paths_alongside_state() {
         let event = SyncStatusEvent {
             root_id: "root-1".to_string(),
-            state: SyncState::Synced,
+            state: SyncState::Synced {
+                last_synced: Some(1_700_000_000_000),
+            },
             origin_paths: vec!["note.md".to_string(), "folder/other.md".to_string()],
         };
 
@@ -624,7 +745,7 @@ mod tests {
         init_repo(dir.path());
         write_and_stage(dir.path(), "note.md", "hello\n");
 
-        let (state, merged) = sync_once(dir.path(), true, "");
+        let (state, merged) = sync_once("root-1", dir.path(), true, "");
 
         assert_eq!(state, SyncState::LocalOnly);
         assert!(
@@ -642,7 +763,12 @@ mod tests {
         init_repo(dir.path());
         write_and_stage(dir.path(), "note.md", "hello\n");
 
-        let (state, merged) = sync_once(dir.path(), false, "git@example.com:user/notes.git");
+        let (state, merged) = sync_once(
+            "root-1",
+            dir.path(),
+            false,
+            "git@example.com:user/notes.git",
+        );
 
         assert_eq!(state, SyncState::LocalOnly);
         assert!(
@@ -656,11 +782,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         init_repo(dir.path());
         write_and_stage(dir.path(), "note.md", "hello\n");
-        sync_once(dir.path(), true, "");
+        sync_once("root-1", dir.path(), true, "");
 
         // Second run: nothing changed since the first commit. `git commit`
         // failing with "nothing to commit" must not surface as SyncState::Error.
-        let (state, merged) = sync_once(dir.path(), true, "");
+        let (state, merged) = sync_once("root-1", dir.path(), true, "");
 
         assert_eq!(state, SyncState::LocalOnly);
         assert!(!merged);
@@ -668,109 +794,147 @@ mod tests {
 
     #[test]
     fn sync_once_pushes_to_a_configured_remote_and_reports_synced() {
-        let remote_dir = TempDir::new().unwrap();
-        init_bare_remote(remote_dir.path());
+        with_xdg_config_home(|| {
+            let remote_dir = TempDir::new().unwrap();
+            init_bare_remote(remote_dir.path());
 
-        let dir = TempDir::new().unwrap();
-        init_repo(dir.path());
-        run_git(
-            dir.path(),
-            &[
-                "remote",
-                "add",
-                "origin",
+            let dir = TempDir::new().unwrap();
+            init_repo(dir.path());
+            run_git(
+                dir.path(),
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    remote_dir.path().to_str().unwrap(),
+                ],
+            )
+            .unwrap();
+            write_and_stage(dir.path(), "note.md", "hello\n");
+
+            // `git push` needs an upstream on the first push from a fresh repo.
+            run_git(dir.path(), &["add", "-A"]).unwrap();
+            run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
+            let push = run_git(
+                dir.path(),
+                &["push", "-u", "origin", "HEAD:refs/heads/main"],
+            )
+            .unwrap();
+            assert!(
+                push.status.success(),
+                "seed push failed: {}",
+                stderr_of(&push)
+            );
+
+            write_and_stage(dir.path(), "note2.md", "more\n");
+            let (state, merged) = sync_once(
+                "root-1",
+                dir.path(),
+                true,
                 remote_dir.path().to_str().unwrap(),
-            ],
-        )
-        .unwrap();
-        write_and_stage(dir.path(), "note.md", "hello\n");
+            );
 
-        // `git push` needs an upstream on the first push from a fresh repo.
-        run_git(dir.path(), &["add", "-A"]).unwrap();
-        run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
-        let push = run_git(
-            dir.path(),
-            &["push", "-u", "origin", "HEAD:refs/heads/main"],
-        )
-        .unwrap();
-        assert!(
-            push.status.success(),
-            "seed push failed: {}",
-            stderr_of(&push)
-        );
-
-        write_and_stage(dir.path(), "note2.md", "more\n");
-        let (state, merged) = sync_once(dir.path(), true, remote_dir.path().to_str().unwrap());
-
-        assert_eq!(state, SyncState::Synced);
-        assert!(
-            !merged,
-            "push succeeded on the first try -- no merge needed"
-        );
+            match state {
+                SyncState::Synced { last_synced } => {
+                    assert!(
+                        last_synced.is_some(),
+                        "a successful push must record a timestamp"
+                    );
+                }
+                other => panic!("expected Synced, got {other:?}"),
+            }
+            assert!(
+                !merged,
+                "push succeeded on the first try -- no merge needed"
+            );
+            assert_eq!(
+                crate::state::last_synced_at("root-1"),
+                match state {
+                    SyncState::Synced { last_synced } => last_synced,
+                    _ => None,
+                },
+                "the timestamp reported in the state must match what was persisted"
+            );
+        });
     }
 
     #[test]
     fn sync_once_merges_and_repushes_after_a_rejected_push() {
-        let remote_dir = TempDir::new().unwrap();
-        init_bare_remote(remote_dir.path());
+        with_xdg_config_home(|| {
+            let remote_dir = TempDir::new().unwrap();
+            init_bare_remote(remote_dir.path());
 
-        // Clone A seeds the remote's initial history.
-        let clone_a = TempDir::new().unwrap();
-        init_repo(clone_a.path());
-        run_git(
-            clone_a.path(),
-            &[
-                "remote",
-                "add",
-                "origin",
-                remote_dir.path().to_str().unwrap(),
-            ],
-        )
-        .unwrap();
-        write_and_stage(clone_a.path(), "shared.md", "base\n");
-        run_git(clone_a.path(), &["add", "-A"]).unwrap();
-        run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
-        run_git(
-            clone_a.path(),
-            &["push", "-u", "origin", "HEAD:refs/heads/main"],
-        )
-        .unwrap();
-
-        // Clone B clones the same history, then diverges with its own file.
-        let clone_b = TempDir::new().unwrap();
-        let clone = Command::new("git")
-            .args([
-                "clone",
-                remote_dir.path().to_str().unwrap(),
-                clone_b.path().to_str().unwrap(),
-            ])
-            .output()
+            // Clone A seeds the remote's initial history.
+            let clone_a = TempDir::new().unwrap();
+            init_repo(clone_a.path());
+            run_git(
+                clone_a.path(),
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    remote_dir.path().to_str().unwrap(),
+                ],
+            )
             .unwrap();
-        assert!(clone.status.success());
-        set_identity(clone_b.path());
+            write_and_stage(clone_a.path(), "shared.md", "base\n");
+            run_git(clone_a.path(), &["add", "-A"]).unwrap();
+            run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
+            run_git(
+                clone_a.path(),
+                &["push", "-u", "origin", "HEAD:refs/heads/main"],
+            )
+            .unwrap();
 
-        // Clone A pushes a second, unrelated commit that clone B doesn't have.
-        write_and_stage(clone_a.path(), "a-only.md", "from a\n");
-        run_git(clone_a.path(), &["add", "-A"]).unwrap();
-        run_git(clone_a.path(), &["commit", "-m", "a-only"]).unwrap();
-        let push_a = run_git(clone_a.path(), &["push"]).unwrap();
-        assert!(push_a.status.success());
+            // Clone B clones the same history, then diverges with its own file.
+            let clone_b = TempDir::new().unwrap();
+            let clone = Command::new("git")
+                .args([
+                    "clone",
+                    remote_dir.path().to_str().unwrap(),
+                    clone_b.path().to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
+            assert!(clone.status.success());
+            set_identity(clone_b.path());
 
-        // Clone B now commits its own unrelated file and syncs -- its push
-        // should be rejected (remote has diverged), triggering an automatic
-        // merge that resolves cleanly since the two commits touch different files.
-        write_and_stage(clone_b.path(), "b-only.md", "from b\n");
-        let (state, merged) = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
+            // Clone A pushes a second, unrelated commit that clone B doesn't have.
+            write_and_stage(clone_a.path(), "a-only.md", "from a\n");
+            run_git(clone_a.path(), &["add", "-A"]).unwrap();
+            run_git(clone_a.path(), &["commit", "-m", "a-only"]).unwrap();
+            let push_a = run_git(clone_a.path(), &["push"]).unwrap();
+            assert!(push_a.status.success());
 
-        assert_eq!(state, SyncState::Synced);
-        assert!(
-            merged,
-            "the first push was rejected, so a merge must have run"
-        );
-        assert!(
-            clone_b.path().join("a-only.md").exists(),
-            "merge should have pulled in a's file"
-        );
+            // Clone B now commits its own unrelated file and syncs -- its push
+            // should be rejected (remote has diverged), triggering an automatic
+            // merge that resolves cleanly since the two commits touch different files.
+            write_and_stage(clone_b.path(), "b-only.md", "from b\n");
+            let (state, merged) = sync_once(
+                "root-1",
+                clone_b.path(),
+                true,
+                remote_dir.path().to_str().unwrap(),
+            );
+
+            assert!(
+                matches!(
+                    state,
+                    SyncState::Synced {
+                        last_synced: Some(_)
+                    }
+                ),
+                "expected Synced with a recorded timestamp, got {state:?}"
+            );
+            assert!(
+                merged,
+                "the first push was rejected, so a merge must have run"
+            );
+            assert!(
+                clone_b.path().join("a-only.md").exists(),
+                "merge should have pulled in a's file"
+            );
+        });
     }
 
     #[test]
@@ -822,7 +986,12 @@ mod tests {
         // rejected, the automatic merge collides on shared.md, and the chain
         // must report `conflict` rather than force a resolution.
         write_and_stage(clone_b.path(), "shared.md", "base, edited by b\n");
-        let (state, merged) = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
+        let (state, merged) = sync_once(
+            "root-1",
+            clone_b.path(),
+            true,
+            remote_dir.path().to_str().unwrap(),
+        );
 
         assert_eq!(state, SyncState::Conflict);
         assert!(
@@ -876,7 +1045,7 @@ mod tests {
         assert!(run_git(clone_a.path(), &["push"]).unwrap().status.success());
 
         write_and_stage(dir, "shared.md", "base, edited by b\n");
-        let (state, _merged) = sync_once(dir, true, remote_dir.path().to_str().unwrap());
+        let (state, _merged) = sync_once("root-1", dir, true, remote_dir.path().to_str().unwrap());
         assert_eq!(state, SyncState::Conflict);
     }
 
@@ -885,7 +1054,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         seed_a_real_merge_conflict(dir.path());
 
-        let status = root_status(dir.path(), Some(SyncState::Synced));
+        let status = root_status(
+            "root-1",
+            dir.path(),
+            true,
+            Some(SyncState::Synced {
+                last_synced: Some(0),
+            }),
+        );
 
         assert_eq!(status.conflicted_paths, vec!["shared.md".to_string()]);
         assert_eq!(status.sync_state, SyncState::Conflict);
@@ -896,10 +1072,42 @@ mod tests {
         let dir = TempDir::new().unwrap();
         init_repo(dir.path());
 
-        let status = root_status(dir.path(), None);
+        let status = root_status("root-1", dir.path(), true, None);
 
         assert!(status.conflicted_paths.is_empty());
         assert_eq!(status.sync_state, SyncState::LocalOnly);
+    }
+
+    #[test]
+    fn root_status_hydrates_the_persisted_timestamp_when_no_sync_has_run_this_session() {
+        with_xdg_config_home(|| {
+            let dir = TempDir::new().unwrap();
+            init_repo(dir.path());
+            crate::state::record_last_synced_at("root-1", 1_700_000_000_000).unwrap();
+
+            let status = root_status("root-1", dir.path(), true, None);
+
+            assert!(status.conflicted_paths.is_empty());
+            assert_eq!(
+                status.sync_state,
+                SyncState::Synced {
+                    last_synced: Some(1_700_000_000_000)
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn root_status_does_not_hydrate_a_persisted_timestamp_for_a_root_with_no_remote() {
+        with_xdg_config_home(|| {
+            let dir = TempDir::new().unwrap();
+            init_repo(dir.path());
+            crate::state::record_last_synced_at("root-1", 1_700_000_000_000).unwrap();
+
+            let status = root_status("root-1", dir.path(), false, None);
+
+            assert_eq!(status.sync_state, SyncState::LocalOnly);
+        });
     }
 
     #[test]
@@ -907,10 +1115,22 @@ mod tests {
         let dir = TempDir::new().unwrap();
         init_repo(dir.path());
 
-        let status = root_status(dir.path(), Some(SyncState::Synced));
+        let status = root_status(
+            "root-1",
+            dir.path(),
+            true,
+            Some(SyncState::Synced {
+                last_synced: Some(0),
+            }),
+        );
 
         assert!(status.conflicted_paths.is_empty());
-        assert_eq!(status.sync_state, SyncState::Synced);
+        assert_eq!(
+            status.sync_state,
+            SyncState::Synced {
+                last_synced: Some(0)
+            }
+        );
     }
 
     #[test]
@@ -931,7 +1151,7 @@ mod tests {
             .unwrap()
             .contains("<<<<<<<"));
 
-        let result = mark_resolved(dir.path(), "shared.md", &absolute_path, false, "");
+        let result = mark_resolved("root-1", dir.path(), "shared.md", &absolute_path, false, "");
 
         assert!(result.is_err());
         assert!(
@@ -952,7 +1172,8 @@ mod tests {
         let absolute_path = dir.path().join("shared.md");
         fs::write(&absolute_path, "base, resolved by hand\n").unwrap();
 
-        let outcome = mark_resolved(dir.path(), "shared.md", &absolute_path, false, "").unwrap();
+        let outcome =
+            mark_resolved("root-1", dir.path(), "shared.md", &absolute_path, false, "").unwrap();
 
         assert_eq!(outcome.sync_state, SyncState::LocalOnly);
         assert!(
@@ -1013,15 +1234,27 @@ mod tests {
         // on both files, giving a genuine two-file conflicted merge.
         write_and_stage(clone_b.path(), "first.md", "base, edited by b\n");
         write_and_stage(clone_b.path(), "second.md", "base, edited by b\n");
-        let (state, _merged) = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
+        let (state, _merged) = sync_once(
+            "root-1",
+            clone_b.path(),
+            true,
+            remote_dir.path().to_str().unwrap(),
+        );
         assert_eq!(state, SyncState::Conflict);
         assert_eq!(conflicted_relative_paths(clone_b.path()).len(), 2);
 
         let first_absolute = clone_b.path().join("first.md");
         fs::write(&first_absolute, "base, resolved by hand\n").unwrap();
 
-        let outcome =
-            mark_resolved(clone_b.path(), "first.md", &first_absolute, false, "").unwrap();
+        let outcome = mark_resolved(
+            "root-1",
+            clone_b.path(),
+            "first.md",
+            &first_absolute,
+            false,
+            "",
+        )
+        .unwrap();
 
         assert_eq!(outcome.sync_state, SyncState::Conflict);
         assert!(
@@ -1036,65 +1269,82 @@ mod tests {
 
     #[test]
     fn mark_resolved_pushes_after_finishing_the_merge_when_a_remote_is_configured() {
-        let remote_dir = TempDir::new().unwrap();
-        init_bare_remote(remote_dir.path());
+        with_xdg_config_home(|| {
+            let remote_dir = TempDir::new().unwrap();
+            init_bare_remote(remote_dir.path());
 
-        let clone_a = TempDir::new().unwrap();
-        init_repo(clone_a.path());
-        run_git(
-            clone_a.path(),
-            &[
-                "remote",
-                "add",
-                "origin",
-                remote_dir.path().to_str().unwrap(),
-            ],
-        )
-        .unwrap();
-        write_and_stage(clone_a.path(), "shared.md", "base\n");
-        run_git(clone_a.path(), &["add", "-A"]).unwrap();
-        run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
-        run_git(
-            clone_a.path(),
-            &["push", "-u", "origin", "HEAD:refs/heads/main"],
-        )
-        .unwrap();
-
-        let clone_b = TempDir::new().unwrap();
-        let clone = Command::new("git")
-            .args([
-                "clone",
-                remote_dir.path().to_str().unwrap(),
-                clone_b.path().to_str().unwrap(),
-            ])
-            .output()
+            let clone_a = TempDir::new().unwrap();
+            init_repo(clone_a.path());
+            run_git(
+                clone_a.path(),
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    remote_dir.path().to_str().unwrap(),
+                ],
+            )
             .unwrap();
-        assert!(clone.status.success());
-        set_identity(clone_b.path());
+            write_and_stage(clone_a.path(), "shared.md", "base\n");
+            run_git(clone_a.path(), &["add", "-A"]).unwrap();
+            run_git(clone_a.path(), &["commit", "-m", "base"]).unwrap();
+            run_git(
+                clone_a.path(),
+                &["push", "-u", "origin", "HEAD:refs/heads/main"],
+            )
+            .unwrap();
 
-        write_and_stage(clone_a.path(), "shared.md", "base, edited by a\n");
-        run_git(clone_a.path(), &["add", "-A"]).unwrap();
-        run_git(clone_a.path(), &["commit", "-m", "a edits shared"]).unwrap();
-        assert!(run_git(clone_a.path(), &["push"]).unwrap().status.success());
+            let clone_b = TempDir::new().unwrap();
+            let clone = Command::new("git")
+                .args([
+                    "clone",
+                    remote_dir.path().to_str().unwrap(),
+                    clone_b.path().to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
+            assert!(clone.status.success());
+            set_identity(clone_b.path());
 
-        write_and_stage(clone_b.path(), "shared.md", "base, edited by b\n");
-        let (state, _merged) = sync_once(clone_b.path(), true, remote_dir.path().to_str().unwrap());
-        assert_eq!(state, SyncState::Conflict);
+            write_and_stage(clone_a.path(), "shared.md", "base, edited by a\n");
+            run_git(clone_a.path(), &["add", "-A"]).unwrap();
+            run_git(clone_a.path(), &["commit", "-m", "a edits shared"]).unwrap();
+            assert!(run_git(clone_a.path(), &["push"]).unwrap().status.success());
 
-        let absolute_path = clone_b.path().join("shared.md");
-        fs::write(&absolute_path, "base, resolved by hand\n").unwrap();
+            write_and_stage(clone_b.path(), "shared.md", "base, edited by b\n");
+            let (state, _merged) = sync_once(
+                "root-1",
+                clone_b.path(),
+                true,
+                remote_dir.path().to_str().unwrap(),
+            );
+            assert_eq!(state, SyncState::Conflict);
 
-        let outcome = mark_resolved(
-            clone_b.path(),
-            "shared.md",
-            &absolute_path,
-            true,
-            remote_dir.path().to_str().unwrap(),
-        )
-        .unwrap();
+            let absolute_path = clone_b.path().join("shared.md");
+            fs::write(&absolute_path, "base, resolved by hand\n").unwrap();
 
-        assert_eq!(outcome.sync_state, SyncState::Synced);
-        assert!(!is_merge_in_progress(clone_b.path()));
+            let outcome = mark_resolved(
+                "root-1",
+                clone_b.path(),
+                "shared.md",
+                &absolute_path,
+                true,
+                remote_dir.path().to_str().unwrap(),
+            )
+            .unwrap();
+
+            assert!(
+                matches!(
+                    outcome.sync_state,
+                    SyncState::Synced {
+                        last_synced: Some(_)
+                    }
+                ),
+                "expected Synced with a recorded timestamp, got {:?}",
+                outcome.sync_state
+            );
+            assert!(!is_merge_in_progress(clone_b.path()));
+        });
     }
 
     #[test]
@@ -1265,129 +1515,136 @@ mod tests {
 
     #[test]
     fn run_startup_catchup_pushes_committed_but_unpushed_commits_to_the_remote() {
-        let remote_dir = TempDir::new().unwrap();
-        init_bare_remote(remote_dir.path());
+        with_xdg_config_home(|| {
+            let remote_dir = TempDir::new().unwrap();
+            init_bare_remote(remote_dir.path());
 
-        let dir = TempDir::new().unwrap();
-        init_repo(dir.path());
-        run_git(
-            dir.path(),
-            &[
-                "remote",
-                "add",
-                "origin",
-                remote_dir.path().to_str().unwrap(),
-            ],
-        )
-        .unwrap();
-        // Seed an initial commit pushed with upstream tracking set up, as any
-        // root startup catchup runs against would already have from an
-        // earlier successful sync -- otherwise a plain `git push` has no
-        // upstream to push to regardless of what startup catchup does.
-        write_and_stage(dir.path(), "seed.md", "base\n");
-        run_git(dir.path(), &["add", "-A"]).unwrap();
-        run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
-        let seed_push = run_git(
-            dir.path(),
-            &["push", "-u", "origin", "HEAD:refs/heads/main"],
-        )
-        .unwrap();
-        assert!(seed_push.status.success());
+            let dir = TempDir::new().unwrap();
+            init_repo(dir.path());
+            run_git(
+                dir.path(),
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    remote_dir.path().to_str().unwrap(),
+                ],
+            )
+            .unwrap();
+            // Seed an initial commit pushed with upstream tracking set up, as any
+            // root startup catchup runs against would already have from an
+            // earlier successful sync -- otherwise a plain `git push` has no
+            // upstream to push to regardless of what startup catchup does.
+            write_and_stage(dir.path(), "seed.md", "base\n");
+            run_git(dir.path(), &["add", "-A"]).unwrap();
+            run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
+            let seed_push = run_git(
+                dir.path(),
+                &["push", "-u", "origin", "HEAD:refs/heads/main"],
+            )
+            .unwrap();
+            assert!(seed_push.status.success());
 
-        write_and_stage(dir.path(), "note.md", "hello\n");
-        run_git(dir.path(), &["add", "-A"]).unwrap();
-        run_git(dir.path(), &["commit", "-m", "unpushed"]).unwrap();
-        // Working tree is clean -- the commit above exists locally only, and
-        // this is the only thing startup catchup needs to resolve.
-        assert!(!remote_log_oneline(remote_dir.path()).contains("unpushed"));
+            write_and_stage(dir.path(), "note.md", "hello\n");
+            run_git(dir.path(), &["add", "-A"]).unwrap();
+            run_git(dir.path(), &["commit", "-m", "unpushed"]).unwrap();
+            // Working tree is clean -- the commit above exists locally only, and
+            // this is the only thing startup catchup needs to resolve.
+            assert!(!remote_log_oneline(remote_dir.path()).contains("unpushed"));
 
-        let app = mock_app_handle();
-        let manager = Arc::new(SyncManager::new());
-        let root = RootConfig {
-            id: "root-1".to_string(),
-            path: dir.path().to_str().unwrap().to_string(),
-            auto_sync: true,
-            remote_url: remote_dir.path().to_str().unwrap().to_string(),
-            sync_debounce_secs: 0,
-        };
+            let app = mock_app_handle();
+            let manager = Arc::new(SyncManager::new());
+            let root = RootConfig {
+                id: "root-1".to_string(),
+                path: dir.path().to_str().unwrap().to_string(),
+                auto_sync: true,
+                remote_url: remote_dir.path().to_str().unwrap().to_string(),
+                sync_debounce_secs: 0,
+            };
 
-        run_startup_catchup(&app, &manager, vec![root]);
+            run_startup_catchup(&app, &manager, vec![root]);
 
-        let pushed = wait_until(Duration::from_secs(5), || {
-            remote_log_oneline(remote_dir.path()).contains("unpushed")
+            let pushed = wait_until(Duration::from_secs(5), || {
+                remote_log_oneline(remote_dir.path()).contains("unpushed")
+            });
+            assert!(
+                pushed,
+                "expected startup catchup to push the unpushed commit to the remote"
+            );
         });
-        assert!(
-            pushed,
-            "expected startup catchup to push the unpushed commit to the remote"
-        );
     }
 
     #[test]
     fn run_startup_catchup_commits_a_dirty_working_tree_and_pushes_it() {
-        let remote_dir = TempDir::new().unwrap();
-        init_bare_remote(remote_dir.path());
+        with_xdg_config_home(|| {
+            let remote_dir = TempDir::new().unwrap();
+            init_bare_remote(remote_dir.path());
 
-        let dir = TempDir::new().unwrap();
-        init_repo(dir.path());
-        run_git(
-            dir.path(),
-            &[
-                "remote",
-                "add",
-                "origin",
-                remote_dir.path().to_str().unwrap(),
-            ],
-        )
-        .unwrap();
-        // Seed an initial pushed commit so this root has an upstream to push
-        // against, then leave the working tree dirty -- the scenario left
-        // behind by a quit mid-save or mid-sync-delay (issue #84/#86).
-        write_and_stage(dir.path(), "note.md", "hello\n");
-        run_git(dir.path(), &["add", "-A"]).unwrap();
-        run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
-        let seed_push = run_git(
-            dir.path(),
-            &["push", "-u", "origin", "HEAD:refs/heads/main"],
-        )
-        .unwrap();
-        assert!(seed_push.status.success());
+            let dir = TempDir::new().unwrap();
+            init_repo(dir.path());
+            run_git(
+                dir.path(),
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    remote_dir.path().to_str().unwrap(),
+                ],
+            )
+            .unwrap();
+            // Seed an initial pushed commit so this root has an upstream to push
+            // against, then leave the working tree dirty -- the scenario left
+            // behind by a quit mid-save or mid-sync-delay (issue #84/#86).
+            write_and_stage(dir.path(), "note.md", "hello\n");
+            run_git(dir.path(), &["add", "-A"]).unwrap();
+            run_git(dir.path(), &["commit", "-m", "seed"]).unwrap();
+            let seed_push = run_git(
+                dir.path(),
+                &["push", "-u", "origin", "HEAD:refs/heads/main"],
+            )
+            .unwrap();
+            assert!(seed_push.status.success());
 
-        write_and_stage(dir.path(), "note.md", "hello, edited\n");
-        let status = run_git(dir.path(), &["status", "--porcelain"]).unwrap();
-        assert!(
-            !status.stdout.is_empty(),
-            "expected a dirty working tree before startup catchup runs"
-        );
+            write_and_stage(dir.path(), "note.md", "hello, edited\n");
+            let status = run_git(dir.path(), &["status", "--porcelain"]).unwrap();
+            assert!(
+                !status.stdout.is_empty(),
+                "expected a dirty working tree before startup catchup runs"
+            );
 
-        let app = mock_app_handle();
-        let manager = Arc::new(SyncManager::new());
-        let root = RootConfig {
-            id: "root-1".to_string(),
-            path: dir.path().to_str().unwrap().to_string(),
-            auto_sync: true,
-            remote_url: remote_dir.path().to_str().unwrap().to_string(),
-            sync_debounce_secs: 0,
-        };
+            let app = mock_app_handle();
+            let manager = Arc::new(SyncManager::new());
+            let root = RootConfig {
+                id: "root-1".to_string(),
+                path: dir.path().to_str().unwrap().to_string(),
+                auto_sync: true,
+                remote_url: remote_dir.path().to_str().unwrap().to_string(),
+                sync_debounce_secs: 0,
+            };
 
-        run_startup_catchup(&app, &manager, vec![root]);
+            run_startup_catchup(&app, &manager, vec![root]);
 
-        let synced = wait_until(Duration::from_secs(5), || {
-            manager.last_known_state("root-1") == Some(SyncState::Synced)
+            let synced = wait_until(Duration::from_secs(5), || {
+                matches!(
+                    manager.last_known_state("root-1"),
+                    Some(SyncState::Synced { .. })
+                )
+            });
+            assert!(
+                synced,
+                "expected the dirty working tree to be committed and pushed"
+            );
+
+            let status_after = run_git(dir.path(), &["status", "--porcelain"]).unwrap();
+            assert!(
+                status_after.stdout.is_empty(),
+                "the dirty change must have been committed"
+            );
+            assert!(
+                remote_log_oneline(remote_dir.path()).contains("note-taker sync"),
+                "the commit made from the dirty working tree must have reached the remote"
+            );
         });
-        assert!(
-            synced,
-            "expected the dirty working tree to be committed and pushed"
-        );
-
-        let status_after = run_git(dir.path(), &["status", "--porcelain"]).unwrap();
-        assert!(
-            status_after.stdout.is_empty(),
-            "the dirty change must have been committed"
-        );
-        assert!(
-            remote_log_oneline(remote_dir.path()).contains("note-taker sync"),
-            "the commit made from the dirty working tree must have reached the remote"
-        );
     }
 
     #[test]
@@ -1826,5 +2083,37 @@ mod tests {
             0,
             "root B had no countdown in progress -- rearm_delay must not have armed one"
         );
+    }
+
+    /// A manual sync (issue #92) cancels any countdown already armed for that
+    /// root, so the delayed run doesn't fire again afterwards and re-run the
+    /// chain redundantly.
+    #[test]
+    fn cancel_delay_prevents_an_armed_countdown_from_firing() {
+        let dir = TempDir::new().unwrap();
+        init_repo(dir.path());
+        write_and_stage(dir.path(), "note.md", "hello\n");
+
+        let app = mock_app_handle();
+        let manager = Arc::new(SyncManager::new());
+        let root = root_config("root-1", dir.path(), 0);
+
+        trigger_sync_delayed(app, manager.clone(), root, None);
+        manager.cancel_delay("root-1");
+
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            commit_count(dir.path()),
+            0,
+            "cancel_delay must stop the armed countdown from ever firing"
+        );
+    }
+
+    /// Cancelling a root with nothing in flight must be a harmless no-op --
+    /// a manual sync on a root with no pending debounce is the common case.
+    #[test]
+    fn cancel_delay_does_nothing_when_no_countdown_is_in_progress() {
+        let manager = SyncManager::new();
+        manager.cancel_delay("root-1");
     }
 }

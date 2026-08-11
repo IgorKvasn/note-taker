@@ -494,7 +494,7 @@ describe("NoteEditor", () => {
       await screen.findByText("Loaded");
       invoke.mockClear();
 
-      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" }, origin_paths: ["note.md"] });
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null }, origin_paths: ["note.md"] });
 
       expect(invoke).not.toHaveBeenCalledWith("open_note", expect.anything());
     });
@@ -504,7 +504,7 @@ describe("NoteEditor", () => {
       await screen.findByText("Loaded");
       invoke.mockClear();
 
-      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" }, origin_paths: ["other.md"] });
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null }, origin_paths: ["other.md"] });
 
       await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
     });
@@ -514,7 +514,7 @@ describe("NoteEditor", () => {
       await screen.findByText("Loaded");
       invoke.mockClear();
 
-      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" }, origin_paths: [] });
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null }, origin_paths: [] });
 
       await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
     });
@@ -552,7 +552,7 @@ describe("NoteEditor", () => {
       // down on unmount; firing its handler directly (as if it raced the
       // cleanup) must not resurrect old.md's content into the new note.
       const staleHandler = listen.mock.calls[0][1] as (event: { payload: SyncStatusEvent }) => void;
-      staleHandler({ payload: { root_id: "01ROOT", state: { state: "synced" }, origin_paths: [] } });
+      staleHandler({ payload: { root_id: "01ROOT", state: { state: "synced", last_synced: null }, origin_paths: [] } });
 
       await waitFor(() => expect(screen.queryByText("CONTENT OF old.md")).toBeNull());
       expect(screen.getByText("CONTENT OF new.md")).toBeDefined();
@@ -576,7 +576,7 @@ describe("NoteEditor", () => {
       // Still inside the debounce window -- the edit hasn't been sent yet.
       expect(invoke).not.toHaveBeenCalledWith("save_note", expect.anything());
 
-      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
 
       // The typed text must survive: no overwrite from stale disk content,
       // and no save of anything other than what the user actually typed.
@@ -608,7 +608,7 @@ describe("NoteEditor", () => {
 
       // Caret sits right after the "X" the user just typed, at offset 1.
       mockInvoke({ open_note: { content: "XLoaded\n", id: "01LOADED", is_conflicted: false } });
-      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
 
       await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
 
@@ -647,7 +647,7 @@ describe("NoteEditor", () => {
         );
 
         mockInvoke({ open_note: { content: remoteContent, id: "01LOADED", is_conflicted: false } });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
         await waitFor(() => expect(editable.textContent).toBe(withoutNewlines(remoteContent.trimEnd())));
 
         return { user, editable };
@@ -679,7 +679,7 @@ describe("NoteEditor", () => {
         );
 
         mockInvoke({ open_note: { content: "oZne\ntwo\nthree\nfour\n", id: "01LOADED", is_conflicted: false } });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
         await waitFor(() => expect(editable.textContent).toBe("oZnetwothreefour"));
 
         expect(window.getSelection()?.anchorOffset).toBe(2);
@@ -715,7 +715,7 @@ describe("NoteEditor", () => {
         );
 
         mockInvoke({ open_note: { content: "one CHANGED three\n", id: "01LOADED", is_conflicted: false } });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
         await waitFor(() => expect(editable.textContent).toBe("one CHANGED three"));
 
         const offset = window.getSelection()?.anchorOffset ?? -1;
@@ -735,7 +735,7 @@ describe("NoteEditor", () => {
         await user.keyboard("{Home}{Right}{Right}{Right}{Right}{Shift>}{Right}{Right}{Right}{/Shift}");
 
         mockInvoke({ open_note: { content: "one two three-appended\n", id: "01LOADED", is_conflicted: false } });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
         await waitFor(() => expect(editable.textContent).toBe("one two three-appended"));
 
         // Asserted via CodeMirror's own state rather than the native DOM
@@ -753,7 +753,7 @@ describe("NoteEditor", () => {
         scroller.scrollTop = 250;
 
         mockInvoke({ open_note: { content: "Loaded\nappended far below\n", id: "01LOADED", is_conflicted: false } });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
         await waitFor(() => expect(screen.queryByText("appended far below")).not.toBeNull());
 
         expect(scroller.scrollTop).toBe(250);
@@ -777,7 +777,7 @@ describe("NoteEditor", () => {
         );
 
         mockInvoke({ open_note: { content: "Loaded mine appended\n", id: "01LOADED", is_conflicted: false } });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
         await waitFor(() => expect(editable.textContent).toBe("Loaded mine appended"));
 
         await user.keyboard("{Control>}z{/Control}");
@@ -804,7 +804,7 @@ describe("NoteEditor", () => {
           }
           return Promise.resolve(undefined);
         });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
         await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_note", { rootId: "01ROOT", path: "note.md" }));
 
         // Typed while the re-fetch above is still in flight.
@@ -855,7 +855,7 @@ describe("NoteEditor", () => {
             is_conflicted: false,
           },
         });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
         await waitFor(() => expect(screen.queryByText("line6")).not.toBeNull());
 
         // The caret's own line survived untouched, so its offset relative to
@@ -879,7 +879,7 @@ describe("NoteEditor", () => {
         mockInvoke({
           open_note: { content: "line1\r\nline2 edited CHANGED\r\nline3\r\n", id: "01LOADED", is_conflicted: false },
         });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
 
         await waitFor(() => expect(editable.textContent).toBe("line1line2 edited CHANGEDline3"));
       });
@@ -899,7 +899,7 @@ describe("NoteEditor", () => {
         mockInvoke({
           open_note: { content: "note \u{1F601} end edited\n", id: "01LOADED", is_conflicted: false },
         });
-        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+        await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
 
         await waitFor(() => expect(editable.textContent).toBe("note \u{1F601} end edited"));
       });
@@ -1283,7 +1283,7 @@ describe("NoteEditor", () => {
       // The linking note edited away its link to this one; the next rescan
       // (triggered by a settled sync, same as the tree's own refresh) reflects that.
       scanResult = { notes: [{ id: "01A", path: "a.md", directory_path: "", title: "a" }], backlinks: {} };
-      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced" } });
+      await emitSyncStatus({ root_id: "01ROOT", state: { state: "synced", last_synced: null } });
 
       await waitFor(() => expect(screen.queryByText(/linked from/i)).toBeNull());
     });

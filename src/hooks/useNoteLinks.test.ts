@@ -59,7 +59,7 @@ describe("useNoteLinks", () => {
       for (const [event, handler] of listen.mock.calls) {
         if (event === "sync-status") {
           (handler as (event: { payload: SyncStatusEvent }) => void)({
-            payload: { root_id: "A", state: { state: "synced" }, origin_paths: [] },
+            payload: { root_id: "A", state: { state: "synced", last_synced: null }, origin_paths: [] },
           });
         }
       }
@@ -83,7 +83,7 @@ describe("useNoteLinks", () => {
     };
 
     await act(async () => {
-      fire({ root_id: "OTHER", state: { state: "synced" }, origin_paths: [] });
+      fire({ root_id: "OTHER", state: { state: "synced", last_synced: null }, origin_paths: [] });
     });
     expect(scanCount()).toBe(before);
 
@@ -93,7 +93,7 @@ describe("useNoteLinks", () => {
     expect(scanCount()).toBe(before);
 
     await act(async () => {
-      fire({ root_id: "A", state: { state: "synced" }, origin_paths: [] });
+      fire({ root_id: "A", state: { state: "synced", last_synced: null }, origin_paths: [] });
     });
     expect(scanCount()).toBe(before + 1);
   });

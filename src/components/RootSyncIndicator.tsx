@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -19,6 +19,32 @@ interface RootSyncIndicatorProps {
   /** Called whenever the root's conflicted-file list is (re)fetched, so a
    * parent can drive a one-time toast per affected root (issue #26). */
   onConflictedPathsChange?: (paths: string[]) => void;
+  /**
+   * Flushes the open note's pending autosave before a manual sync (issue #92);
+   * resolves immediately if no note from this root is open. Omitted entirely
+   * (rather than defaulted to a no-op) falls back to skipping the flush.
+   */
+  onFlushPendingSave?: (rootId: string) => Promise<void>;
+}
+
+const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+function isSameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+/** Time-only (`14:32`) if `epochMillis` falls today, otherwise date+time
+ * (`10 Aug 14:32`) -- both via `Intl.DateTimeFormat` under the system locale,
+ * with no relative phrasing and no separate date library (issue #92). */
+function formatSyncedAt(epochMillis: number): string {
+  const date = new Date(epochMillis);
+  return isSameDay(date, new Date()) ? timeFormatter.format(date) : dateTimeFormatter.format(date);
 }
 
 function labelFor(state: SyncState): string {
@@ -26,7 +52,7 @@ function labelFor(state: SyncState): string {
     case "syncing":
       return "Syncing…";
     case "synced":
-      return "Synced";
+      return state.last_synced === null ? "Never synced" : formatSyncedAt(state.last_synced);
     case "local_only":
       return "Local only";
     case "conflict":
@@ -34,6 +60,29 @@ function labelFor(state: SyncState): string {
     case "error":
       return "Sync failed";
   }
+}
+
+/** Full date+time tooltip for the synced state, regardless of the shorter
+ * label shown today -- distinct from `formatSyncedAt` so "today" is never
+ * ambiguous even though the label omits the date. */
+function titleFor(state: SyncState): string | undefined {
+  switch (state.state) {
+    case "synced":
+      return state.last_synced === null ? undefined : dateTimeFormatter.format(new Date(state.last_synced));
+    case "local_only":
+      return "No remote configured for this root";
+    case "error":
+      return state.stderr;
+    default:
+      return undefined;
+  }
+}
+
+function accessibleLabelFor(state: SyncState): string {
+  if (state.state === "synced" && state.last_synced !== null) {
+    return `Sync now (last synced ${formatSyncedAt(state.last_synced)})`;
+  }
+  return "Sync now";
 }
 
 function resolutionLabel(conflictedPaths: string[]): string {
@@ -46,7 +95,12 @@ function resolutionLabel(conflictedPaths: string[]): string {
  * sensible default (`local_only`) at launch before `get_root_status` resolves,
  * rather than a blank/loading state -- most roots have no remote at all.
  */
-export function RootSyncIndicator({ rootId, onSyncSettled, onConflictedPathsChange }: RootSyncIndicatorProps) {
+export function RootSyncIndicator({
+  rootId,
+  onSyncSettled,
+  onConflictedPathsChange,
+  onFlushPendingSave,
+}: RootSyncIndicatorProps) {
   const [state, setState] = useState<SyncState>({ state: "local_only" });
   const [conflictedPaths, setConflictedPaths] = useState<string[]>([]);
 
@@ -96,29 +150,36 @@ export function RootSyncIndicator({ rootId, onSyncSettled, onConflictedPathsChan
     };
   }, [rootId, onSyncSettled, fetchConflictedPaths]);
 
-  const retry = useCallback(
+  // A repeat click while already syncing still runs this whole sequence again
+  // rather than being guarded on the frontend -- the backend's busy/pending
+  // coalescing (issue #86) already makes that cheap, per issue #92's spec.
+  const onFlushPendingSaveRef = useRef(onFlushPendingSave);
+  onFlushPendingSaveRef.current = onFlushPendingSave;
+
+  const syncNow = useCallback(
     (event: React.MouseEvent) => {
       event.stopPropagation();
-      invoke(COMMAND_SYNC_ROOT, { rootId }).catch(() => {});
+      const flush = onFlushPendingSaveRef.current?.(rootId) ?? Promise.resolve();
+      flush
+        .catch(() => {})
+        .then(() => invoke(COMMAND_SYNC_ROOT, { rootId }))
+        .catch(() => {});
     },
     [rootId],
   );
 
-  const canRetry = state.state === "conflict" || state.state === "error";
-
   return (
-    <span
-      className="root-sync-indicator"
-      data-sync-state={state.state}
-      title={state.state === "error" ? state.stderr : undefined}
-    >
+    <span className="root-sync-indicator" data-sync-state={state.state} title={titleFor(state)}>
       <span className="root-sync-indicator__dot" aria-hidden="true" />
-      <span className="root-sync-indicator__label">{labelFor(state)}</span>
-      {canRetry && (
-        <button type="button" className="root-sync-indicator__retry" onClick={retry}>
-          Retry
-        </button>
-      )}
+      <button
+        type="button"
+        className="root-sync-indicator__label"
+        onClick={syncNow}
+        disabled={state.state === "local_only"}
+        aria-label={accessibleLabelFor(state)}
+      >
+        {labelFor(state)}
+      </button>
       {conflictedPaths.length > 0 && (
         <span className="root-sync-indicator__resolution-count">{resolutionLabel(conflictedPaths)}</span>
       )}

@@ -156,10 +156,12 @@ export interface UiState {
 /**
  * Mirrors `SyncState` in `src-tauri/src/sync.rs`, serialized as an
  * externally-tagged enum via `#[serde(tag = "state", rename_all = "snake_case")]`.
+ * `last_synced` is epoch milliseconds of the root's last successful remote
+ * push (issue #92), or `null` if it has never pushed successfully.
  */
 export type SyncState =
   | { state: "syncing" }
-  | { state: "synced" }
+  | { state: "synced"; last_synced: number | null }
   | { state: "local_only" }
   | { state: "conflict" }
   | { state: "error"; stderr: string };

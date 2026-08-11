@@ -204,6 +204,10 @@ fn move_item(
 
 #[tauri::command]
 fn sync_root(app: AppHandle, root_id: String) -> Result<(), String> {
+    // Cancel any armed debounce countdown first (issue #92): otherwise a
+    // manual sync runs immediately here and the earlier delayed trigger still
+    // fires afterwards, re-running the chain and re-flickering the indicator.
+    app.state::<Arc<SyncManager>>().cancel_delay(&root_id);
     trigger_sync_for_root_immediate(&app, &root_id);
     Ok(())
 }
@@ -213,7 +217,13 @@ fn get_root_status(app: AppHandle, root_id: String) -> Result<RootStatus, String
     let root = config::find_root_config(&root_id)?;
     let manager = app.state::<Arc<SyncManager>>();
     let last_known_state = manager.last_known_state(&root_id);
-    Ok(sync::root_status(Path::new(&root.path), last_known_state))
+    let has_remote = root.auto_sync && !root.remote_url.is_empty();
+    Ok(sync::root_status(
+        &root_id,
+        Path::new(&root.path),
+        has_remote,
+        last_known_state,
+    ))
 }
 
 /// Marks one conflicted note as resolved (issue #26). Runs synchronously
@@ -229,6 +239,7 @@ fn mark_resolved(app: AppHandle, root_id: String, path: String) -> Result<(), St
     let repo_path = Path::new(&root.path);
 
     let outcome = sync::mark_resolved(
+        &root_id,
         repo_path,
         &path,
         &absolute_path,
