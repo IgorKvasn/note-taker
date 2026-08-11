@@ -491,7 +491,7 @@ A scan for unreferenced attachments runs automatically in the background **on ap
 > **Automatic deletion can race a `git pull`.** A pull can bring an attachment before the note referencing it, or land in a root that hasn't synced yet; a naive scan would see it as unreferenced and delete it, permanently breaking the note the next time it arrives. This is the same shape §9.5 already refused for ID backfill during the tree walk — a read command must not write, and here a background scan must not delete based on an incomplete view.
 
 - **What counts as a reference** — a hand-rolled substring scan for `attachment:<ULID>` in note body text, frontmatter excluded, no fenced-code-block awareness. Mirrors the `note:` link scan (`links.rs:56-80`) exactly, accepting the same rare-false-negative risk (a bare ULID inside a code fence) for consistency.
-- **Pull-race guard** — a **24-hour grace period on the attachment file's own mtime**. `git checkout`/`pull` sets mtime to "now" for any file it writes, so a freshly-pulled attachment's clock starts at pull time — exactly the window that needs protecting.
+- **Pull-race guard** — a **1-minute grace period on the attachment file's own mtime**. `git checkout`/`pull` sets mtime to "now" for any file it writes, so a freshly-pulled attachment's clock starts at pull time — exactly the window that needs protecting. Note that a window this short only covers a pull whose attachment and referencing note land within the same minute; a slower sync can still lose an attachment that is genuinely referenced.
 - **Unsaved buffers** — the scan command takes an optional extra parameter: the currently-open note's live buffer content. Its `attachment:` references count as live alongside the full-root disk scan, so an on-screen-only reference isn't treated as orphaned. Omitted at app start, when no note is open yet.
 - **Trigger frequency** — scanned once per session, on app start and the first preview-mode switch, then cached. Each `save_note` incrementally updates the cache by re-extracting just that note's own reference set, rather than a full-root rescan per save.
 - **Commit granularity** — an ordinary mutation through the existing sync chain (§7): same `git add -A`, same commit message as every other sync. No special-casing.
@@ -524,7 +524,7 @@ Consolidated from the sections above — each is a deliberate decision with rati
 | No auto-update — manual `dpkg -i` per release | §10 |
 | Only Ubuntu 26.04 supported — the `.deb` will not install on 22.04 or 24.04 | §10 |
 | Raw `.md` will not render `attachment:` images in GitHub, Obsidian, or any other markdown viewer | §11 |
-| Automatic attachment cleanup can race a `git pull` bringing in a note after its attachment already looked unreferenced (mitigated by a 24h mtime grace period, not eliminated) | §11 |
+| Automatic attachment cleanup can race a `git pull` bringing in a note after its attachment already looked unreferenced (mitigated by a 1-minute mtime grace period, not eliminated) | §11 |
 | No size cap on attachments, and no Git LFS | §11 |
 | Remote `http(s)` image URLs remain allowed in `src` — a synced note can phone home to an arbitrary host on render | §11 |
 | No CM6 inline image preview in edit mode — images render in view mode only | §11 |

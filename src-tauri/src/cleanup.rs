@@ -26,7 +26,7 @@ const ATTACHMENTS_DIR: &str = ".attachments";
 /// An attachment younger than this is never cleaned up regardless of
 /// reference status -- guards against a `git pull` race where the attachment
 /// file arrives before the note that references it (spec §11.5).
-const GRACE_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
+const GRACE_PERIOD: Duration = Duration::from_secs(60);
 
 /// Extracts the ULIDs referenced by `attachment:<ULID>` occurrences in `body`,
 /// via plain substring matching -- deliberately not reusing `links.rs`'s
@@ -171,7 +171,7 @@ fn list_attachment_files(root_path: &Path) -> Vec<AttachmentFile> {
     files
 }
 
-/// True if `modified` is old enough to leave the 24-hour grace period as of
+/// True if `modified` is old enough to leave the grace period as of
 /// `now` -- an attachment younger than that is never a cleanup candidate,
 /// regardless of reference status.
 fn is_past_grace_period(modified: SystemTime, now: SystemTime) -> bool {
@@ -199,7 +199,7 @@ fn all_referenced_ids(
 }
 
 /// One attachment identified as orphaned: unreferenced by any note (including
-/// `extra_reference_text`) and past the 24-hour grace period.
+/// `extra_reference_text`) and past the grace period.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct OrphanedAttachment {
     /// The root this attachment was found in -- needed once a preview spans
@@ -222,7 +222,7 @@ pub struct CleanupPreview {
 
 /// Finds every attachment in `root_path` that is unreferenced by any note
 /// (per `cache`'s scan, plus `extra_reference_text` if a note is open) and
-/// past the 24-hour grace period. Read-only -- callers decide whether/how to
+/// past the grace period. Read-only -- callers decide whether/how to
 /// delete what's returned.
 pub fn find_orphaned_attachments(
     root_id: &str,
@@ -389,7 +389,7 @@ mod tests {
             temp_dir.path(),
             "01FRESH-photo.png",
             b"bytes",
-            Duration::from_secs(60 * 60),
+            Duration::from_secs(10),
         );
         let cache = ReferenceCache::new();
 
@@ -397,7 +397,7 @@ mod tests {
 
         assert!(
             preview.attachments.is_empty(),
-            "an attachment younger than 24h must be excluded regardless of reference status"
+            "an attachment younger than the grace period must be excluded regardless of reference status"
         );
     }
 
