@@ -67,6 +67,7 @@ jobs:
             libssl-dev
             libayatana-appindicator3-dev
             librsvg2-dev
+            xvfb
           version: 1
 
       - name: Install Rust toolchain
@@ -91,9 +92,12 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets --profile test -- -D warnings
 
+      # sync.rs builds one real Wry `App` to get an `AppHandle` it can call
+      # `.emit()` on; Wry initializes GTK under the hood on Linux, which
+      # needs a display connection even though no window is ever created.
       - name: cargo test
         working-directory: src-tauri
-        run: cargo test
+        run: xvfb-run --auto-servernum cargo test
 
   commit-messages:
     # The husky commit-msg hook is bypassable (--no-verify, GitHub web edits,
