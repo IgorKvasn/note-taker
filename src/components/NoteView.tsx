@@ -3,6 +3,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { ATTACHMENT_PROTOCOL, ATTACHMENT_SCHEME, BROKEN_ATTACHMENT_TITLE, attachmentTarget } from "./attachments";
 import { copyToClipboard } from "./clipboard";
 import { Toast } from "./Toast";
@@ -130,7 +131,19 @@ function NoteLink({ href, children, resolveNoteLink, onOpenNoteLink, ...anchorPr
   // notably the aria and footnote-backref props GFM puts on footnote links.
   if (targetId === null) {
     return (
-      <a href={href} {...anchorProps}>
+      <a
+        href={href}
+        {...anchorProps}
+        onClick={(event) => {
+          // The webview would otherwise navigate itself to the target instead
+          // of leaving the note; send external links to the OS browser.
+          if (href === undefined) {
+            return;
+          }
+          event.preventDefault();
+          void openUrl(href);
+        }}
+      >
         {children}
       </a>
     );

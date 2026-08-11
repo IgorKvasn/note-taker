@@ -2,9 +2,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NoteView } from "./NoteView";
 
+const { openUrl } = vi.hoisted(() => ({ openUrl: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
+
 describe("NoteView", () => {
   beforeEach(() => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    openUrl.mockClear();
   });
 
   it("renders a raw script tag inert, without executing it", () => {
@@ -51,6 +55,18 @@ describe("NoteView", () => {
     expect(container.querySelector("del")).not.toBeNull();
     const autolink = container.querySelector('a[href="https://example.com"]');
     expect(autolink).not.toBeNull();
+  });
+
+  it("opens an external link in the OS browser instead of navigating the webview", () => {
+    const { container } = render(<NoteView content="[example](https://example.com)" />);
+
+    const link = container.querySelector('a[href="https://example.com"]');
+    expect(link).not.toBeNull();
+
+    const event = fireEvent.click(link as Element);
+
+    expect(event).toBe(false);
+    expect(openUrl).toHaveBeenCalledWith("https://example.com");
   });
 
   it("syntax-highlights fenced code blocks", () => {

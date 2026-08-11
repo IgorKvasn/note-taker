@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { BROKEN_NOTE_LINK_TITLE } from "./noteLinks";
 import { NoteView } from "./NoteView";
 
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn().mockResolvedValue(undefined) }));
+
 describe("NoteView note: links", () => {
   it("calls onOpenNoteLink with the resolved path when a resolvable note: link is clicked", () => {
     const onOpenNoteLink = vi.fn();

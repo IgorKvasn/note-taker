@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions the main window needs. Tauri v2 denies core commands unless granted here, so the menu-event listener requires core:event:allow-listen explicitly. dialog:default covers the native folder picker and message dialog used by config setup. opener:allow-open-url is scoped to this repo's own GitHub release pages -- the changelog modal's 'view on GitHub' button -- rather than granted for arbitrary URLs.",
+  "description": "Core permissions the main window needs. Tauri v2 denies core commands unless granted here, so the menu-event listener requires core:event:allow-listen explicitly. dialog:default covers the native folder picker and message dialog used by config setup. opener:allow-open-url is scoped to http(s) URLs -- covering both the changelog modal's 'view on GitHub' button and links clicked in note previews -- rather than granted for arbitrary URL schemes.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
@@ -9,7 +9,7 @@
     "dialog:default",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://github.com/IgorKvasn/note-taker/releases/*" }]
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
     }
   ]
 }
