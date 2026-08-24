@@ -221,33 +221,35 @@ export function NoteView({ content, resolveNoteLink, onOpenNoteLink, resolveAtta
 
   return (
     <div className="note-view" data-testid="note-view">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight, [rehypeSanitize, SANITIZE_SCHEMA]]}
-        urlTransform={allowNoteSchemeUrl}
-        components={{
-          pre: ({ className = "", children }) => (
-            <CopyableBlock as="pre" className={className} onCopy={showToast}>
-              {children}
-            </CopyableBlock>
-          ),
-          blockquote: ({ className = "", children }) => (
-            <CopyableBlock as="blockquote" className={className} onCopy={showToast}>
-              {children}
-            </CopyableBlock>
-          ),
-          a: ({ children, node: _node, ...anchorProps }) => (
-            <NoteLink {...anchorProps} resolveNoteLink={resolveNoteLink} onOpenNoteLink={onOpenNoteLink}>
-              {children}
-            </NoteLink>
-          ),
-          img: ({ node: _node, ...imgProps }) => (
-            <Attachment {...imgProps} resolveAttachment={resolveAttachment} />
-          ),
-        }}
-      >
-        {content}
-      </ReactMarkdown>
+      <div className="note-view__content">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeHighlight, [rehypeSanitize, SANITIZE_SCHEMA]]}
+          urlTransform={allowNoteSchemeUrl}
+          components={{
+            pre: ({ className = "", children }) => (
+              <CopyableBlock as="pre" className={className} onCopy={showToast}>
+                {children}
+              </CopyableBlock>
+            ),
+            blockquote: ({ className = "", children }) => (
+              <CopyableBlock as="blockquote" className={className} onCopy={showToast}>
+                {children}
+              </CopyableBlock>
+            ),
+            a: ({ children, node: _node, ...anchorProps }) => (
+              <NoteLink {...anchorProps} resolveNoteLink={resolveNoteLink} onOpenNoteLink={onOpenNoteLink}>
+                {children}
+              </NoteLink>
+            ),
+            img: ({ node: _node, ...imgProps }) => (
+              <Attachment {...imgProps} resolveAttachment={resolveAttachment} />
+            ),
+          }}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
       <Toast toasts={toasts} />
     </div>
   );
