@@ -1,9 +1,24 @@
 @import "highlight.js/styles/github.css";
 
+/* The scroll container is full-height, so it stays the hit target for the empty
+ * space below a short note's content. A double-click there resolves to the
+ * nearest text position -- the end of the last block -- and WebKit paints that
+ * selection down to the container's bottom edge. Making the container itself
+ * unselectable takes the dead space out of play; every child opts back in, so
+ * the rendered markdown selects and copies normally. */
 .note-view {
   height: 100%;
   overflow-y: auto;
   padding: 8px 12px;
+  /* The prefixed property is the one that takes effect in the WebKitGTK webview
+   * this ships in; there is no autoprefixer in the build. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.note-view > * {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .note-view table {
