@@ -6,14 +6,6 @@
   padding: 8px 12px;
 }
 
-/* Shrinks to the rendered markdown rather than filling `.note-view`, so a
- * double-click near the end of a short note selects only the text and does not
- * paint the highlight across the empty space below it. The scrollable box stays
- * `.note-view` so the padding remains part of the scroll area. */
-.note-view__content {
-  display: flow-root;
-}
-
 .note-view table {
   border-collapse: collapse;
 }
