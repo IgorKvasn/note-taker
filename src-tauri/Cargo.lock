@@ -2421,7 +2421,7 @@ dependencies = [
 
 [[package]]
 name = "note-taker"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "directories",
  "png 0.18.1",
