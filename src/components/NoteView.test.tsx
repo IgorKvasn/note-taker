@@ -57,6 +57,54 @@ describe("NoteView", () => {
     expect(autolink).not.toBeNull();
   });
 
+  describe("copying a selection that ends in the next table cell", () => {
+    const table = "| A | B |\n| --- | --- |\n| abc123 | xyz789 |\n| next | row |";
+
+    /** Selects from the start of `fromCell`'s text to `toNode`:`toOffset` and fires a copy. */
+    function copySelection(fromCell: Element, toNode: Node, toOffset: number) {
+      const range = document.createRange();
+      range.setStart(fromCell.firstChild!, 0);
+      range.setEnd(toNode, toOffset);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      const setData = vi.fn();
+      const notCancelled = fireEvent.copy(fromCell, { clipboardData: { setData } });
+      return { setData, notCancelled };
+    }
+
+    // WebKit's triple-click ends the range at offset 0 of the next cell (or row), and
+    // its plain-text serializer then appends a "\t" (or "\n") the user never saw.
+    it("copies only the cell's text when the range ends at the start of the next cell", () => {
+      const { container } = render(<NoteView content={table} />);
+      const [cell, nextCell] = Array.from(container.querySelectorAll("td"));
+
+      const { setData, notCancelled } = copySelection(cell, nextCell, 0);
+
+      expect(notCancelled).toBe(false);
+      expect(setData).toHaveBeenCalledWith("text/plain", "abc123");
+    });
+
+    it("copies only the cell's text when the range ends at the start of the next row", () => {
+      const { container } = render(<NoteView content={table} />);
+      const cells = Array.from(container.querySelectorAll("td"));
+
+      const { setData } = copySelection(cells[1], cells[2], 0);
+
+      expect(setData).toHaveBeenCalledWith("text/plain", "xyz789");
+    });
+
+    it("leaves a selection that really spans several cells to the browser", () => {
+      const { container } = render(<NoteView content={table} />);
+      const [cell, nextCell] = Array.from(container.querySelectorAll("td"));
+
+      const { setData, notCancelled } = copySelection(cell, nextCell.firstChild!, 3);
+
+      expect(notCancelled).toBe(true);
+      expect(setData).not.toHaveBeenCalled();
+    });
+  });
+
   it("opens an external link in the OS browser instead of navigating the webview", () => {
     const { container } = render(<NoteView content="[example](https://example.com)" />);
 

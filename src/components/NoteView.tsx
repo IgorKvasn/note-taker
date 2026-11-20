@@ -216,11 +216,38 @@ function Attachment({ src, alt, resolveAttachment, ...imgProps }: AttachmentProp
   return <img {...imgProps} src={resolved} alt={alt} className="note-view__attachment" data-testid="attachment" />;
 }
 
+/**
+ * WebKit's triple-click (and a drag just past a cell's edge) ends the selection at
+ * offset 0 of the next cell or row, and its plain-text copy then appends the
+ * crossed boundary as a "\t" or "\n" the user never saw selected. When nothing
+ * outside the starting cell is actually selected, copy just that cell's text.
+ */
+function copyWithinTableCell(event: React.ClipboardEvent) {
+  const selection = window.getSelection();
+  if (selection === null || selection.rangeCount === 0) {
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  const start = range.startContainer;
+  const cell = (start instanceof Element ? start : start.parentElement)?.closest("td, th");
+  if (!cell || cell.contains(range.endContainer)) {
+    return;
+  }
+  const withinCell = range.cloneRange();
+  withinCell.setEnd(cell, cell.childNodes.length);
+  const text = withinCell.toString();
+  if (text !== range.toString()) {
+    return;
+  }
+  event.preventDefault();
+  event.clipboardData.setData("text/plain", text);
+}
+
 export function NoteView({ content, resolveNoteLink, onOpenNoteLink, resolveAttachment }: NoteViewProps) {
   const { toasts, showToast } = useToasts();
 
   return (
-    <div className="note-view" data-testid="note-view">
+    <div className="note-view" data-testid="note-view" onCopy={copyWithinTableCell}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, SANITIZE_SCHEMA]]}
